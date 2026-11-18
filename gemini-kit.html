@@ -494,17 +494,20 @@ button.vz-day { font-weight: 700; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+:root { --head-h: 81px; } /* 上のバーの高さ（2 段）。横の固定パネルはこの下に止める */
 body { font-family: var(--font); color: var(--ink); background: var(--bg); font-size: 14px; line-height: 1.6; }
-header.top { background: var(--head); color: #fff; display: flex; flex-wrap: wrap; align-items: stretch; column-gap: 24px; padding: 0 20px; min-height: 52px; position: sticky; top: 0; z-index: 10; }
+/* 上のバー：背景は画面いっぱい、中身（.top-in）は main と同じ幅・同じ余白にそろえる。1 段目＝タイトルと案件、2 段目＝タブ */
+header.top { background: var(--head); color: #fff; position: sticky; top: 0; z-index: 10; }
+header.top .top-in { max-width: 1600px; margin: 0 auto; padding: 0 20px; box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; column-gap: 24px; min-height: 40px; }
 header.top h1 { font-size: 16px; margin: 0; white-space: nowrap; letter-spacing: .02em; display: flex; align-items: center; }
 header.top h1 small { color: #C9D4E3; font-weight: normal; margin-left: 8px; font-size: 12px; }
-header.top .save-kit { align-self: center; padding: 4px 12px; border: 1px solid #C9D4E3; border-radius: 6px; background: transparent; color: #fff; font-size: 13px; cursor: pointer; white-space: nowrap; }
+header.top .save-kit { margin: 4px 0 4px auto; min-height: 32px; padding: 0 12px; line-height: 30px; border: 1px solid #C9D4E3; border-radius: 6px; background: transparent; color: #fff; font-size: 13px; cursor: pointer; white-space: nowrap; }
 header.top .save-kit:hover { background: rgba(255,255,255,.12); }
 header.top .save-kit:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 body.is-shared .save-kit { display: none; }
 /* 狭い画面でもタブが隠れないよう、横スクロールではなく折り返す */
-nav.tabs { display: flex; flex-wrap: wrap; gap: 2px; }
-nav.tabs button { background: none; border: 0; border-radius: 0; color: #C9D4E3; font: inherit; padding: 0 14px; min-height: 52px; cursor: pointer; border-bottom: 3px solid transparent; white-space: nowrap; }
+nav.tabs { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px; border-top: 1px solid rgba(255,255,255,.12); }
+nav.tabs button { background: none; border: 0; border-radius: 0; color: #C9D4E3; font: inherit; padding: 0 14px; min-height: 40px; cursor: pointer; border-bottom: 3px solid transparent; white-space: nowrap; }
 nav.tabs button:hover { color: #fff; }
 nav.tabs button.on { color: #fff; border-bottom-color: var(--gold); font-weight: bold; }
 main { padding: 20px; max-width: 1600px; margin: 0 auto; }
@@ -581,7 +584,8 @@ li.ok { color: var(--ok); border-color: var(--ok); }
 #case-pick select { max-width: 280px; padding: 4px 6px; border-radius: 6px; border: 1px solid #fff; background: #fff; color: var(--ink); }
 #case-pick .case-pick-i { color: #DDE3F5; white-space: nowrap; }
 @media (max-width: 700px) {
-  header.top { position: static; padding: 0 12px; }
+  header.top { position: static; }
+  header.top .top-in { padding: 0 12px; }
   nav.tabs button { min-height: 40px; padding: 0 10px; }
   main { padding: 12px; }
   #case-pick { flex-wrap: wrap; max-width: 100%; min-width: 0; padding: 4px 0; }
@@ -783,7 +787,7 @@ button.linkish { border: 0; background: none; padding: 0; min-height: 0; color: 
 
 /* 文書ビュー */
 .doc-work { display: grid; grid-template-columns: minmax(300px, 30%) 1fr; gap: 16px; align-items: start; }
-.doc-side { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 8px; }
+.doc-side { position: sticky; top: calc(var(--head-h) + 20px); display: flex; flex-direction: column; gap: 8px; }
 .doc-side textarea { height: calc(100vh - 300px); min-height: 280px; }
 #tab-doc.wide .doc-work { grid-template-columns: 1fr; }
 #tab-doc.wide .doc-side textarea, #tab-doc.wide .doc-side .src-only { display: none; }
@@ -824,7 +828,7 @@ button.linkish { border: 0; background: none; padding: 0; min-height: 0; color: 
 
 /* プロンプト集 */
 .lib { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
-.lib-side { position: sticky; top: 72px; max-height: calc(100vh - 92px); display: flex; flex-direction: column; gap: 8px; }
+.lib-side { position: sticky; top: calc(var(--head-h) + 20px); max-height: calc(100vh - var(--head-h) - 40px); display: flex; flex-direction: column; gap: 8px; }
 #lib-list { overflow-y: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
 #lib-list .cat { font-size: 12px; color: var(--sub); font-weight: bold; padding: 10px 8px 4px; }
 #lib-list .item { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; border: 0; border-radius: 6px; padding: 6px 8px; }
@@ -856,7 +860,7 @@ button.linkish { border: 0; background: none; padding: 0; min-height: 0; color: 
 
 /* 2列の作業画面 */
 .work { display: grid; grid-template-columns: minmax(340px, 34%) 1fr; gap: 16px; align-items: start; }
-.work .src { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 8px; }
+.work .src { position: sticky; top: calc(var(--head-h) + 20px); display: flex; flex-direction: column; gap: 8px; }
 .work .src textarea { height: calc(100vh - 260px); min-height: 300px; }
 #flow-view { overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px; min-height: 200px; }
 #flow-view svg { display: block; max-width: none; }
@@ -909,7 +913,7 @@ table.grid td.ex { color: var(--sub); max-width: 420px; overflow: hidden; text-o
 </style>
 </head>
 <body>
-<header class="top">
+<header class="top"><div class="top-in">
   <h1>Gemini 案件キット<small>オフラインで動作・外部送信なし</small></h1>
   <div id="case-pick"></div>
   <button type="button" id="save-kit" class="save-kit" title="このツール（gemini-kit.html）を 1 ファイルで保存します。案件や設定は入りません">HTML を保存</button>
@@ -925,7 +929,7 @@ table.grid td.ex { color: var(--sub); max-width: 420px; overflow: hidden; text-o
     <button data-tab="help" role="tab" id="tabbtn-help" aria-controls="tab-help">使い方</button>
     <button data-tab="settings" role="tab" id="tabbtn-settings" aria-controls="tab-settings">設定</button>
   </nav>
-</header>
+</div></header>
 <main>
 
 <section class="tab" id="tab-dash" role="tabpanel" aria-labelledby="tabbtn-dash" hidden>
