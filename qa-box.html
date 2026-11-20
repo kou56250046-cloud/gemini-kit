@@ -1,0 +1,1364 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; font-src 'none'; form-action 'none'">
+<title>質問箱</title>
+<style>
+/* 色は gemini-kit の dash.css（デジタル庁の配色）にそろえる */
+:root {
+  --text: #1A1A1C; --label: #626264; --link: #0017C1; --bg: #F8F8FB; --card: #FFFFFF; --control: #F1F1F4; --line: #CCCCCC;
+  --ok: #0017C1; --ok-bg: #E8F1FE;
+  --tbd: #4D4D4D; --tbd-bg: #EEEEEE;
+  --prop: #5B2A99; --prop-bg: #F3ECFB;
+  --doing: #6E5500; --doing-bg: #FBF5E0;
+  --check: #CE0000; --check-bg: #FDEEEE;
+  --font: "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.6; }
+header { position: sticky; top: 0; z-index: 5; background: var(--card); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+header h1 { font-size: 18px; margin: 0; }
+#save-state { font-size: 12px; color: var(--label); }
+#save-state.bad { color: var(--check); font-weight: bold; }
+.io { margin-left: auto; display: flex; gap: 6px; }
+#confirm:empty { display: none; }
+#confirm { width: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: var(--check-bg); padding: 6px 10px; border-radius: 6px; }
+nav#tabs { display: flex; gap: 4px; padding: 8px 16px 0; overflow-x: auto; }
+.tab { border: 1px solid var(--line); border-bottom: none; background: var(--control); padding: 8px 14px; border-radius: 8px 8px 0 0; font: inherit; cursor: pointer; white-space: nowrap; }
+.tab.on { background: var(--card); font-weight: bold; color: var(--link); }
+main { padding: 0 16px 40px; max-width: 1280px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+.card.empty { text-align: center; }
+h2 { font-size: 17px; margin: 0 0 8px; }
+h3 { font-size: 15px; margin: 12px 0 6px; }
+.muted { color: var(--label); font-size: 13px; }
+.nowrap { white-space: nowrap; }
+button, select, input, textarea { font: inherit; }
+button { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { background: var(--control); }
+button.primary { background: var(--link); border-color: var(--link); color: #fff; }
+button.primary:disabled { opacity: .5; cursor: default; }
+button.danger { color: var(--check); border-color: var(--check); }
+button.small { padding: 2px 8px; font-size: 13px; }
+button.link { border: none; background: none; padding: 0; color: var(--link); text-decoration: underline; text-align: left; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 3px solid #3460FB; outline-offset: 1px; }
+textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-family: Consolas, "Meiryo", monospace; font-size: 13px; }
+input[type=text], input[type=search], input[type=date], select { border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; background: #fff; max-width: 100%; }
+.field { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; font-size: 13px; color: var(--label); }
+.field input, .field textarea { color: var(--text); width: 100%; }
+.inline { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.toolbar input[type=search] { min-width: 220px; flex: 1 1 220px; }
+
+/* 状態：色と文字の両方で示す */
+.st { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: bold; white-space: nowrap; border: 1px solid currentColor; }
+.st-ok { color: var(--ok); background: var(--ok-bg); }
+.st-tbd { color: var(--tbd); background: var(--tbd-bg); }
+.st-prop { color: var(--prop); background: var(--prop-bg); }
+.st-doing { color: var(--doing); background: var(--doing-bg); }
+.st-check { color: var(--check); background: var(--check-bg); }
+.st-select { font-weight: bold; border: 1px solid currentColor; }
+.edited { display: inline-block; margin-left: 4px; font-size: 11px; color: var(--label); border: 1px dashed var(--label); border-radius: 4px; padding: 0 3px; }
+.counts { display: flex; flex-direction: column; gap: 6px; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--control); }
+.bar .seg { border: none; border-radius: 0; }
+.bar .seg.st-ok { background: var(--ok); } .bar .seg.st-tbd { background: #8A8A8A; } .bar .seg.st-prop { background: #8E5BD1; } .bar .seg.st-doing { background: #C9A000; } .bar .seg.st-check { background: var(--check); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border-radius: 14px; padding: 2px 10px; font-size: 13px; font-weight: bold; }
+.chip.on { outline: 2px solid var(--text); }
+
+/* 表 */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; background: #fff; font-size: 13px; }
+th, td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+th { background: #EEF2F7; white-space: nowrap; }
+table.grid td.id { white-space: nowrap; font-weight: bold; }
+table.grid td.q { min-width: 260px; }
+table.grid td input[type=text] { width: 9em; }
+table.grid td.num { white-space: nowrap; }
+table.grid td.muted { min-width: 14em; }
+table.grid tr.open > td { background: var(--ok-bg); }
+table.grid tr.detail-row > td { background: #FBFBFD; padding: 0; }
+td.overdue input { border-color: var(--check); }
+.overdue-label { display: block; color: var(--check); font-size: 12px; font-weight: bold; }
+.detail { padding: 10px 14px; }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 12px; }
+.answer-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.qtable { margin: 8px 0; }
+.md p { margin: 6px 0; }
+.md h2, .md h3, .md h4, .md h5 { font-size: 14px; margin: 10px 0 4px; }
+.md pre { background: #F3F5F8; border: 1px solid var(--line); padding: 8px 10px; border-radius: 6px; overflow-x: auto; font-size: 12.5px; }
+.md code { background: #F0F2F5; padding: 0 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12.5px; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--label); }
+td.st-cell { white-space: nowrap; }
+.hist summary { cursor: pointer; color: var(--label); font-size: 13px; }
+.hist ul { font-size: 12.5px; margin: 4px 0; padding-left: 18px; max-height: 240px; overflow-y: auto; }
+
+/* 取り込みのプレビュー */
+.pvlist { list-style: none; padding: 0; margin: 0; }
+.pv { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+.pv.warn { border-color: #C9A000; background: #FFFCF0; }
+.pv-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tag { font-size: 12px; font-weight: bold; padding: 0 6px; border-radius: 4px; color: #fff; }
+.tag.new { background: var(--link); } .tag.upd { background: #4D4D4D; }
+.warns { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--doing); }
+.warn-text { color: var(--check); font-weight: bold; }
+.bad-blocks { color: var(--check); }
+.steps li { margin: 4px 0; }
+pre.prompt { white-space: pre-wrap; background: #F3F5F8; border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-size: 13px; }
+
+@media (max-width: 640px) {
+  header { padding: 8px 10px; }
+  main, nav#tabs { padding-left: 8px; padding-right: 8px; }
+  .io { margin-left: 0; }
+  table.grid td.q { min-width: 200px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>質問箱</h1>
+  <span id="save-state">読み込み中…</span>
+  <div class="io">
+    <button type="button" id="btn-export" title="すべての質問を JSON で保存">書き出し</button>
+    <button type="button" id="btn-import" title="書き出した JSON で置き換える">読み込み</button>
+    <input type="file" id="file-json" accept=".json,application/json" hidden>
+  </div>
+  <div id="confirm" role="alert"></div>
+</header>
+<nav id="tabs" role="tablist" aria-label="画面"></nav>
+<main id="main"></main>
+<script>
+globalThis.GK = globalThis.GK || {};
+GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソースに書かれていることを元に答えてください。ソースに無いことを事実のように書いてはいけません。\n回答は必ず次の形式だけで返してください。前置き・後書き・補足の文は付けず、全体を ```markdown のコードブロック 1 つに入れてください。\n\n## 形式（質問 1 つにつき 1 ブロック。複数の質問なら、ブロックを続けて並べる）\n\n```markdown\n## 新規\n案件: （案件名。分からなければ空欄）\n分類: （例：業務 / データ設計 / マスタ / 画面 / 運用 / その他）\n状態: （確定 / 未確定 / 提案 / 対応中 / 要確認 のどれか 1 つ）\n根拠: （根拠にしたソースの名前。複数なら「、」でつなぐ）\n要確認の理由: （状態が要確認・未確定・提案のときだけ。提案なら、そう考えた理由。ほかは空欄）\n### 質問\n（受け取った質問をそのまま）\n### 回答\n（回答の本文。Markdown で書く）\n```\n\n## 規則\n\n1. 見出しの行\n   - 新しい質問は「## 新規」にする\n   - 質問の中で「Q-012」のように番号を指定されたら、その番号のまま「## Q-012」にする\n2. 状態は、次の 5 つのどれか 1 つだけにする\n   - 確定：ソースに明記されていて、決まっている\n   - 未確定：ソースに案や候補はあるが、決まっていない\n   - 提案：ソースには決まりも案も無く、あなた（NotebookLM）が考えた案。一般的な設計の考え方やソースの別の箇所から推し量ったもの\n   - 対応中：ソースで、誰かが調べている・作っていると書かれている\n   - 要確認：ソースに書かれていない、またはソースどうしが食い違う\n3. ソースに無いことを、ソースに書いてあるかのように書かない\n   - 案を出せるときは「提案」にし、本文でも「提案：」と分かるように書いて、要確認の理由に考えた理由を書く\n   - 案も出せないときは「要確認」にして、理由を書く\n   - 1 つの回答に確定した部分と提案の部分が混ざるときは、ブロックの状態はいちばん確かでないもの（要確認 → 提案 → 対応中 → 未確定 → 確定 の順）にする\n4. 回答の中の見出しは「####」以下を使う。「##」と「###」は使わない\n5. マスタ案・データ設計・項目の一覧・比較など、表にできるものは Markdown の表にする\n   - 表の 1 列目は項目名にする（同じ表の中で重複させない）\n   - 表のいちばん右に「状態」列を必ず付け、行ごとに 確定 / 未確定 / 提案 / 対応中 / 要確認 のどれかを入れる\n   - 行の状態の決め方は、規則 2・3 と同じ。ソースに無い項目を足すときは、その行を「提案」にする\n6. 表のセルの中では改行しない（改行が要るときは \u003cbr\u003e を使う）\n";
+// ---- md.js ----
+// Markdown → 構造 → DOM。Gemini が出す範囲（見出し・段落・表・入れ子の箇条書き・チェック・引用・コード・区切り線）に対応する。
+// DOM は createElement / textContent で組む（貼られた文字列を HTML として解釈しない）。
+// 描画の途中で差し込める口（text / inlineCode / code / heading / table）を用意し、文書ビューが ID や図を足す。
+(function (GK) {
+  "use strict";
+
+  // ---------- パース ----------
+  const RE = {
+    fence: /^\s*(```|~~~)\s*([\w-]*)\s*$/,
+    heading: /^(#{1,6})\s+(.*?)\s*#*\s*$/,
+    tableRow: /^\s*\|.*\|\s*$/,
+    tableSep: /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/,
+    list: /^(\s*)([-*+]|\d+[.)])\s+(.*)$/,
+    quote: /^\s*>\s?(.*)$/,
+    hr: /^\s*([-*_])(\s*\1){2,}\s*$/,
+  };
+
+  function splitRow(line) {
+    let s = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+    const cells = [];
+    let cur = "";
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; continue; }
+      if (s[i] === "|") { cells.push(cur.trim()); cur = ""; continue; }
+      cur += s[i];
+    }
+    cells.push(cur.trim());
+    return cells;
+  }
+
+  // 戻り値：[{type, line, ...}]。line は 1 始まりの開始行
+  function parse(src) {
+    const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+    const blocks = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const start = i + 1;
+      let m;
+      if ((m = line.match(RE.fence))) {
+        const mark = m[1];
+        const buf = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith(mark)) buf.push(lines[i++]);
+        i++;
+        blocks.push({ type: "code", lang: m[2].toLowerCase(), text: buf.join("\n"), line: start, end: i });
+        continue;
+      }
+      if ((m = line.match(RE.heading))) {
+        blocks.push({ type: "heading", level: m[1].length, text: m[2], line: start, end: start });
+        i++;
+        continue;
+      }
+      if (RE.tableRow.test(line) && i + 1 < lines.length && RE.tableSep.test(lines[i + 1])) {
+        const head = splitRow(line);
+        const align = splitRow(lines[i + 1]).map((c) => (/^:-+:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : ""));
+        i += 2;
+        const rows = [];
+        while (i < lines.length && RE.tableRow.test(lines[i])) rows.push(splitRow(lines[i++]));
+        blocks.push({ type: "table", head, align, rows, line: start, end: i });
+        continue;
+      }
+      if (RE.list.test(line)) {
+        const items = [];
+        while (i < lines.length) {
+          const l = lines[i];
+          const lm = l.match(RE.list);
+          if (lm) {
+            let text = lm[3];
+            let check = null;
+            const cb = text.match(/^\[( |x|X)\]\s*/);
+            if (cb) { check = cb[1] !== " "; text = text.slice(cb[0].length); }
+            items.push({ indent: lm[1].replace(/\t/g, "    ").length, ordered: /\d/.test(lm[2]), num: parseInt(lm[2], 10) || null, text, check, line: i + 1 });
+            i++;
+            continue;
+          }
+          // 箇条書きの続きの行（字下げされた文）は直前の項目につなげる
+          if (l.trim() && /^\s{2,}/.test(l) && items.length) { items[items.length - 1].text += "\n" + l.trim(); i++; continue; }
+          break;
+        }
+        blocks.push({ type: "list", items: nest(items), line: start, end: i });
+        continue;
+      }
+      if (RE.quote.test(line)) {
+        const buf = [];
+        while (i < lines.length && RE.quote.test(lines[i])) buf.push(lines[i++].match(RE.quote)[1]);
+        blocks.push({ type: "quote", text: buf.join("\n"), line: start, end: i });
+        continue;
+      }
+      if (RE.hr.test(line)) { blocks.push({ type: "hr", line: start, end: start }); i++; continue; }
+      if (!line.trim()) { i++; continue; }
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !RE.fence.test(lines[i]) && !RE.heading.test(lines[i]) && !RE.list.test(lines[i]) && !RE.quote.test(lines[i]) && !(RE.tableRow.test(lines[i]) && i + 1 < lines.length && RE.tableSep.test(lines[i + 1]))) buf.push(lines[i++]);
+      blocks.push({ type: "para", text: buf.join("\n"), line: start, end: i });
+    }
+    return blocks;
+  }
+
+  // 字下げの深さで入れ子にする。{text, check, ordered, line, children:[]}
+  function nest(flat) {
+    const root = { children: [], indent: -1 };
+    const stack = [root];
+    for (const it of flat) {
+      const node = Object.assign({}, it, { children: [] });
+      while (stack.length > 1 && it.indent <= stack[stack.length - 1].indent) stack.pop();
+      stack[stack.length - 1].children.push(node);
+      stack.push(node);
+    }
+    return root.children;
+  }
+
+  // ---------- 描画 ----------
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  // 行内：**太字**、`コード`、{{変数}}、表の中の <br>
+  const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\{\{[^}]+\}\}|<br\s*\/?>)/i;
+  function inlineDefault(text, parent, hooks) {
+    const lines = String(text).split("\n");
+    lines.forEach((ln, li) => {
+      if (li) parent.append(document.createElement("br"));
+      for (const part of ln.split(new RegExp(INLINE.source, "gi"))) {
+        if (!part) continue;
+        if (/^<br\s*\/?>$/i.test(part)) parent.append(document.createElement("br"));
+        else if (/^\*\*[^*]+\*\*$/.test(part)) { const b = el("strong"); inlineDefault(part.slice(2, -2), b, hooks); parent.append(b); }
+        else if (/^`[^`]+`$/.test(part)) {
+          // inlineCode が true を返したら、フックの側で描いたものとして <code> を作らない
+          if (!(hooks && hooks.inlineCode && hooks.inlineCode(part.slice(1, -1), parent))) parent.append(el("code", null, part.slice(1, -1)));
+        }
+        else if (/^\{\{[^}]+\}\}$/.test(part)) parent.append(el("span", "var", part));
+        else inlineText(part, parent, hooks);
+      }
+    });
+    return parent;
+  }
+  function inlineText(text, parent, hooks) {
+    if (hooks && hooks.text) hooks.text(text, parent);
+    else parent.append(document.createTextNode(text));
+  }
+
+  function render(src, hooks) {
+    const hk = hooks || {};
+    const blocks = Array.isArray(src) ? src : parse(src);
+    const root = el("div", "md");
+    const inl = (text, parent) => inlineDefault(text, parent, hk);
+    const listDom = (items) => {
+      const ordered = items[0] && items[0].ordered;
+      const list = el(ordered ? "ol" : "ul");
+      if (ordered && items[0].num && items[0].num !== 1) list.start = items[0].num;
+      for (const it of items) {
+        const li = el("li");
+        if (it.check != null) { li.className = "task"; li.append(el("span", "cb" + (it.check ? " on" : ""), it.check ? "☑" : "☐")); }
+        inl(it.text, li);
+        if (it.children.length) li.append(listDom(it.children));
+        list.append(li);
+      }
+      return list;
+    };
+    for (const b of blocks) {
+      let node = null;
+      switch (b.type) {
+        case "heading": {
+          node = el("h" + Math.min(6, b.level + 1));
+          inl(b.text, node);
+          if (hk.heading) node = hk.heading(node, b) || node;
+          break;
+        }
+        case "para": node = inl(b.text, el("p")); break;
+        case "quote": node = inl(b.text, el("blockquote")); break;
+        case "hr": node = el("hr"); break;
+        case "list": node = listDom(b.items); break;
+        case "code": {
+          if (hk.code) node = hk.code(b);
+          if (!node) { const pre = el("pre"); pre.append(el("code", null, b.text)); node = pre; }
+          break;
+        }
+        case "table": {
+          const t = el("table");
+          const n = Math.max(b.head.length, ...b.rows.map((r) => r.length));
+          // 数値だけの列は右寄せにする（指定があればそれを優先）
+          const numeric = Array.from({ length: n }, (_, c) => b.rows.length > 0 && b.rows.every((r) => !r[c] || /^[\s\-+*]*[\d,.]+\s*(%|円|万円|件|名|時間|日|分|秒)?[\s*]*$/.test(r[c])));
+          const align = (c) => b.align[c] || (numeric[c] ? "right" : "");
+          // 列の最小幅（em）：その列でいちばん長いセルの見た目の長さ。ただし 10 字まで。
+          // 短い列（ID・状態・数値）は折り返さず、長い文の列だけが残りの幅で折り返す。全列の最小幅が画面より広ければ表の中だけ横に流れる
+          const visW = (s) => [...String(s).replace(/\*\*|`|\\\|/g, "")].reduce((w, ch) => w + (ch.codePointAt(0) < 0x80 ? 0.55 : 1), 0);
+          const colMin = Array.from({ length: n }, (_, c) => Math.round(Math.min(10, Math.max(0, ...b.rows.map((r) => visW(r[c] || "")))) * 10) / 10 + 0.3);
+          const thead = el("thead"), tr = el("tr");
+          // 見出しも折り返してよい。ただし 6 字までと、その列の最小幅までは 1 行に保つ
+          for (let c = 0; c < n; c++) {
+            const th = el("th"), cell = inl(b.head[c] || "", el("div", "cell"));
+            cell.style.minWidth = Math.max(colMin[c], Math.min(6, visW(b.head[c] || "")) + 0.3) + "em";
+            th.append(cell);
+            if (align(c)) th.style.textAlign = align(c);
+            tr.append(th);
+          }
+          thead.append(tr);
+          const tbody = el("tbody");
+          for (const r of b.rows) {
+            const row = el("tr");
+            // 中身は div.cell に入れ、列ごとの最小幅を付ける（td の min-width は効かないが、div の幅は列幅の計算に効く）
+            for (let c = 0; c < n; c++) {
+              const td = el("td"), cell = inl(r[c] || "", el("div", "cell"));
+              cell.style.minWidth = colMin[c] + "em";
+              td.append(cell);
+              if (align(c)) td.style.textAlign = align(c);
+              row.append(td);
+            }
+            if (hk.row) hk.row(row, r, b);
+            tbody.append(row);
+          }
+          t.append(thead, tbody);
+          const wrap = el("div", "tablewrap");
+          wrap.append(t);
+          node = wrap;
+          if (hk.table) node = hk.table(node, b) || node;
+          break;
+        }
+      }
+      if (node) {
+        if (hk.block) hk.block(node, b);
+        root.append(node);
+      }
+    }
+    return root;
+  }
+
+  GK.md = { parse, render, inline: inlineDefault };
+})(globalThis.GK = globalThis.GK || {});
+
+// ---- dom.js ----
+// 画面で使う小さな部品。DOM は createElement / textContent だけで組む。
+(function (GK) {
+  "use strict";
+
+  // el("div", {class: "x", onclick: fn}, "文字", 子要素, [配列])
+  function el(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "text") n.textContent = v;
+      else if (k === "class") n.className = v;
+      else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
+      else if (k === "dataset") Object.assign(n.dataset, v);
+      else n.setAttribute(k, v === true ? "" : String(v));
+    }
+    const add = (c) => {
+      if (c == null || c === false) return;
+      if (Array.isArray(c)) c.forEach(add);
+      else n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    };
+    kids.forEach(add);
+    return n;
+  }
+
+  function download(name, text, type) {
+    const blob = new Blob([text], { type: type || "text/plain;charset=utf-8" });
+    const a = el("a", { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+    } catch (e) { /* 下の方法へ */ }
+    const ta = el("textarea", { style: "position:fixed;left:-9999px;top:0", "aria-hidden": "true" });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  // 押すと文言が変わるボタン（コピーしました 等）
+  function flash(btn, text, ms = 1600) {
+    const old = btn.dataset.label || btn.textContent;
+    btn.dataset.label = old;
+    btn.textContent = text;
+    clearTimeout(btn._t);
+    btn._t = setTimeout(() => { btn.textContent = old; }, ms);
+  }
+
+  const today = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const jpDate = (s) => {
+    const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${+m[1]}年${+m[2]}月${+m[3]}日` : String(s || "");
+  };
+  const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+
+  GK.dom = { el, download, copyText, flash, today, jpDate, daysBetween };
+})(globalThis.GK = globalThis.GK || {});
+
+// ---- parse.js ----
+// NotebookLM の出力（ブロック形式）を読む。DOM を使わない（テストで読む）。
+//   ## Q-012            ← 新しい質問は「## 新規」
+//   案件: ○○
+//   分類: データ設計
+//   状態: 要確認
+//   根拠: ○○.pdf
+//   要確認の理由: ...
+//   日付: 2026-11-20
+//   ### 質問
+//   ...
+//   ### 回答
+//   （Markdown。表は最後に「状態」列）
+(function (GK) {
+  "use strict";
+
+  const STATES = ["確定", "未確定", "提案", "対応中", "要確認"];
+  const FALLBACK = "要確認";
+  // メタ行の見出し → 項目名。表記ゆれも受ける
+  const META = {
+    "案件": "project", "案件名": "project",
+    "分類": "category", "カテゴリ": "category",
+    "状態": "status", "ステータス": "status",
+    "根拠": "source", "根拠ソース": "source", "ソース": "source", "出典": "source",
+    "要確認の理由": "reason", "理由": "reason",
+    "日付": "date",
+  };
+  const META_RE = /^\s*([^:：\s][^:：]{0,9}?)\s*[:：]\s*(.*)$/;
+  const SECTION_RE = /^\s*###\s*(質問|回答)\s*$/;
+  const HEAD_RE = /^\s*##\s+(.*?)\s*$/;
+
+  // ```markdown の囲みを外す。囲みが複数あれば中身をつなぐ（囲みの外の前置き・後書きは捨てる）。
+  // 囲みの中に ```sql などのコードがあっても、言語つきで開いたものは中の囲みとして数える。囲みが無ければ全文
+  function unwrap(text) {
+    const t = String(text == null ? "" : text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+    if (!/^\s*##\s/m.test(t)) return t;
+    const out = [];
+    let outer = null, inner = 0, found = false;
+    for (const line of t.split("\n")) {
+      const m = line.match(/^\s*(`{3,}|~{3,})\s*([\w-]*)\s*$/);
+      if (!outer) {
+        if (m && (m[2] === "" || /^(markdown|md)$/i.test(m[2]))) { outer = m[1]; inner = 0; found = true; continue; }
+        if (!found) out.push(line);
+        continue;
+      }
+      if (m && m[1][0] === outer[0]) {
+        if (m[2]) inner++;
+        else if (inner > 0) inner--;
+        else if (m[1].length >= outer.length) { outer = null; continue; }
+      }
+      out.push(line);
+    }
+    if (!found) return t;
+    return out.join("\n");
+  }
+
+  function normState(s) {
+    const v = String(s == null ? "" : s).replace(/[\s*`【】\[\]]/g, "");
+    if (STATES.includes(v)) return { state: v, ok: true };
+    const hit = STATES.find((x) => v.includes(x) && !(x === "確定" && v.includes("未確定")));
+    if (hit) return { state: hit, ok: true };
+    return { state: FALLBACK, ok: false, raw: String(s == null ? "" : s).trim() };
+  }
+
+  // ID：Q-12 / Q12 / q-012 → Q-012。「新規」や空は null
+  function normId(s) {
+    const m = String(s || "").match(/^\s*[QＱq]\s*[-－ー]?\s*(\d{1,5})\b/);
+    return m ? "Q-" + String(+m[1]).padStart(3, "0") : null;
+  }
+
+  const isMeta = (line) => {
+    const m = line.match(META_RE);
+    return !!(m && META[m[1].trim()]);
+  };
+
+  // ブロックに分ける。始まりは「## 」の行のうち、次の空でない行がメタ行か ### 質問 のもの
+  function splitBlocks(text) {
+    const lines = unwrap(text).split("\n");
+    const starts = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!HEAD_RE.test(lines[i]) || /^\s*###/.test(lines[i])) continue;
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim()) j++;
+      if (j < lines.length && (isMeta(lines[j]) || SECTION_RE.test(lines[j]))) starts.push(i);
+    }
+    const blocks = [];
+    starts.forEach((s, n) => {
+      const end = n + 1 < starts.length ? starts[n + 1] : lines.length;
+      blocks.push({ line: s + 1, lines: lines.slice(s, end) });
+    });
+    return blocks;
+  }
+
+  // 1 ブロックを読む。戻り値 { ok, id, isNew, fields, question, answer, tables, warnings, error }
+  function readBlock(b) {
+    const head = b.lines[0].match(HEAD_RE)[1];
+    const id = normId(head);
+    const fields = {};
+    const warnings = [];
+    let section = null;
+    const buf = { 質問: [], 回答: [] };
+    for (const line of b.lines.slice(1)) {
+      const sm = line.match(SECTION_RE);
+      if (sm) { section = sm[1]; continue; }
+      if (section) { buf[section].push(line); continue; }
+      const m = line.match(META_RE);
+      if (m && META[m[1].trim()]) fields[META[m[1].trim()]] = m[2].trim();
+    }
+    const trim = (arr) => arr.join("\n").replace(/^\s*\n/, "").replace(/\s+$/, "");
+    const question = trim(buf.質問), answer = trim(buf.回答);
+    const label = id || head || `${b.line} 行目`;
+    if (!question || !answer) {
+      return { ok: false, line: b.line, label, error: !question && !answer ? "「### 質問」と「### 回答」がありません" : !question ? "「### 質問」がありません" : "「### 回答」がありません" };
+    }
+    const st = normState(fields.status);
+    if (!st.ok) warnings.push(fields.status ? `状態「${st.raw}」は 決まった語（${STATES.join(" / ")}）のどれでもないので「${FALLBACK}」にしました` : `状態が無いので「${FALLBACK}」にしました`);
+    fields.status = st.state;
+    const tables = readTables(answer, warnings);
+    return { ok: true, line: b.line, label, id, isNew: !id, fields, question, answer, tables, warnings };
+  }
+
+  const keyOf = (s) => String(s || "").replace(/\*\*|`/g, "").replace(/\s+/g, " ").trim();
+
+  // 回答の中の表を出現順に。状態の列があれば行の状態として持つ
+  function readTables(answer, warnings) {
+    const tables = [];
+    for (const blk of GK.md.parse(answer)) {
+      if (blk.type !== "table") continue;
+      const n = tables.length + 1;
+      const head = blk.head.map((h) => keyOf(h));
+      const stateCol = head.findIndex((h) => h === "状態" || h === "ステータス");
+      if (stateCol < 0) warnings.push(`表${n} に「状態」の列がありません（行ごとの状態は持ちません）`);
+      let bad = 0;
+      const seen = new Map();
+      const rows = blk.rows.map((r) => {
+        const cells = head.map((_, c) => r[c] == null ? "" : r[c]);
+        let key = keyOf(cells[0]) || "(空)";
+        const k = (seen.get(key) || 0) + 1;
+        seen.set(key, k);
+        if (k > 1) key += "#" + k;
+        const row = { key, cells, state: "", edited: false };
+        if (stateCol >= 0) {
+          const st = normState(cells[stateCol]);
+          if (!st.ok) bad++;
+          row.state = st.state;
+          cells[stateCol] = st.state;
+        }
+        return row;
+      });
+      if (bad) warnings.push(`表${n} の ${bad} 行は状態が 決まった語（${STATES.join(" / ")}）のどれでもないので「${FALLBACK}」にしました`);
+      tables.push({ head, stateCol, rows });
+    }
+    return tables;
+  }
+
+  // 貼った文全体を読む
+  function read(text) {
+    const blocks = splitBlocks(text).map(readBlock);
+    return { ok: blocks.filter((b) => b.ok), bad: blocks.filter((b) => !b.ok) };
+  }
+
+  GK.parse = { STATES, FALLBACK, META, unwrap, normState, normId, splitBlocks, readBlock, readTables, read, keyOf };
+})(globalThis.GK = globalThis.GK || {});
+
+// ---- model.js ----
+// 質問箱のデータ（db）の操作。DOM を使わない（テストで読む）。
+// db = { version: 1, items: [Item] }。Item の形は .claude/specs/qa-box/design.md
+(function (GK) {
+  "use strict";
+
+  const VERSION = 1;
+  const P = () => GK.parse;
+  // ブロックから入る項目（手で直したら貼り直しでは上書きしない）
+  const BLOCK_FIELDS = ["project", "category", "status", "source", "reason", "date"];
+  // 画面で直す項目
+  const EDIT_FIELDS = [...BLOCK_FIELDS, "owner", "due", "memo", "question"];
+  const LABEL = {
+    project: "案件", category: "分類", status: "状態", source: "根拠", reason: "要確認の理由", date: "日付",
+    owner: "担当", due: "期限", memo: "メモ", question: "質問", answer: "回答",
+  };
+  const HIST_MAX = 200;
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  const nowIso = (now) => (now ? new Date(now) : new Date()).toISOString();
+  const today = (now) => nowIso(now).slice(0, 10);
+
+  const empty = () => ({ version: VERSION, items: [] });
+
+  function nextId(db, taken) {
+    let max = 0;
+    for (const it of db.items) { const m = it.id.match(/^Q-(\d+)$/); if (m) max = Math.max(max, +m[1]); }
+    for (const id of taken || []) { const m = id.match(/^Q-(\d+)$/); if (m) max = Math.max(max, +m[1]); }
+    return "Q-" + String(max + 1).padStart(3, "0");
+  }
+  const find = (db, id) => db.items.find((x) => x.id === id);
+
+  function pushHist(item, at, field, from, to) {
+    item.history.push({ at, field, from: from == null ? "" : String(from), to: to == null ? "" : String(to) });
+    if (item.history.length > HIST_MAX) item.history.splice(0, item.history.length - HIST_MAX);
+  }
+
+  function newItem(id, b, opt, at) {
+    const f = b.fields;
+    return {
+      id,
+      project: f.project || opt.project || "", category: f.category || "", status: f.status,
+      source: f.source || "", reason: f.reason || "", date: f.date || today(at),
+      question: b.question, answer: b.answer, tables: clone(b.tables),
+      owner: "", due: "", memo: "",
+      edited: {}, history: [{ at, field: "取り込み", from: "", to: "新規" }],
+      createdAt: at, updatedAt: at,
+    };
+  }
+
+  // 表を貼り直す。k 番目の表どうしを行の key（1 列目）で突き合わせる。手で直した行の状態は残す
+  function mergeTables(item, newTables, at) {
+    const warnings = [];
+    const oldTables = item.tables || [];
+    const tables = clone(newTables);
+    tables.forEach((t, k) => {
+      const old = oldTables[k];
+      if (!old) return;
+      const byKey = new Map(old.rows.map((r) => [r.key, r]));
+      const keep = new Set();
+      for (const r of t.rows) {
+        const o = byKey.get(r.key);
+        if (!o) { pushHist(item, at, `表${k + 1}「${r.key}」`, "", "行を追加"); continue; }
+        keep.add(r.key);
+        if (t.stateCol < 0) continue;
+        if (o.edited) { r.state = o.state; r.edited = true; r.cells[t.stateCol] = o.state; continue; }
+        if (o.state !== r.state) pushHist(item, at, `表${k + 1}「${r.key}」の状態`, o.state, r.state);
+      }
+      const gone = old.rows.filter((r) => !keep.has(r.key));
+      for (const r of gone) pushHist(item, at, `表${k + 1}「${r.key}」`, "行", "消えた");
+      if (gone.length) warnings.push(`表${k + 1} から ${gone.length} 行が消えました（${gone.slice(0, 3).map((r) => r.key).join("、")}${gone.length > 3 ? " ほか" : ""}）`);
+    });
+    if (oldTables.length > tables.length) warnings.push(`表が ${oldTables.length} から ${tables.length} に減りました`);
+    item.tables = tables;
+    return warnings;
+  }
+
+  // 既存の質問にブロックを重ねる（item を書き換える）。戻り値は警告
+  function mergeInto(item, b, at) {
+    const warnings = [];
+    const kept = [];
+    for (const k of BLOCK_FIELDS) {
+      // 空欄は「分からない」なので前の値を残す。要確認の理由だけは、空欄で消す（確定になったとき）
+      if (!(k in b.fields) || (b.fields[k] === "" && k !== "reason")) continue;
+      const v = b.fields[k];
+      if (item[k] === v) continue;
+      if (item.edited && item.edited[k]) { kept.push(LABEL[k]); continue; }
+      pushHist(item, at, LABEL[k], item[k], v);
+      item[k] = v;
+    }
+    if (kept.length) warnings.push(`手で直した ${kept.join("・")} は残しました`);
+    if (P().keyOf(item.question) !== P().keyOf(b.question)) {
+      warnings.push("質問文が前と違います。別の質問なら「新規として追加」にしてください");
+      pushHist(item, at, LABEL.question, item.question, b.question);
+      item.question = b.question;
+    }
+    if (item.answer !== b.answer) {
+      pushHist(item, at, LABEL.answer, "", "回答を更新");
+      item.answer = b.answer;
+    }
+    warnings.push(...mergeTables(item, b.tables, at));
+    item.updatedAt = at;
+    return warnings;
+  }
+
+  // 取り込みの計画。db は変えない。entries[i] = { block, action: "new"|"update", id, warnings }
+  function plan(db, text, opt = {}) {
+    const res = P().read(text);
+    const at = nowIso(opt.now);
+    const taken = [];
+    const seen = new Set();
+    const entries = res.ok.map((b) => {
+      const warnings = b.warnings.slice();
+      let id = b.id;
+      if (id && seen.has(id)) { warnings.push(`${id} が貼った中で 2 回出てきたので、2 つ目は新しい番号にしました`); id = null; }
+      if (id) seen.add(id);
+      const cur = id && find(db, id);
+      if (cur) {
+        warnings.push(...mergeInto(clone(cur), b, at));
+        return { block: b, action: "update", id, warnings, question: cur.question };
+      }
+      if (!id) { id = nextId(db, [...taken, ...seen]); }
+      taken.push(id);
+      return { block: b, action: "new", id, warnings };
+    });
+    return { entries, bad: res.bad };
+  }
+
+  // 計画を db に反映する。asNew は「新規として追加」に切り替えた entries の番号
+  function apply(db, pl, opt = {}) {
+    const at = nowIso(opt.now);
+    const asNew = new Set(opt.asNew || []);
+    const done = { added: [], updated: [] };
+    const taken = [];
+    pl.entries.forEach((e, i) => {
+      const cur = e.action === "update" && !asNew.has(i) && find(db, e.id);
+      if (cur) {
+        mergeInto(cur, e.block, at);
+        done.updated.push(cur.id);
+        return;
+      }
+      let id = e.action === "new" && !find(db, e.id) ? e.id : nextId(db, taken);
+      taken.push(id);
+      db.items.push(newItem(id, e.block, opt, at));
+      done.added.push(id);
+    });
+    return done;
+  }
+
+  // ---------- 画面での編集 ----------
+  function edit(db, id, field, value, opt = {}) {
+    const it = find(db, id);
+    if (!it || !EDIT_FIELDS.includes(field)) return false;
+    let v = String(value == null ? "" : value);
+    if (field === "status") v = P().normState(v).state;
+    if (it[field] === v) return false;
+    const at = nowIso(opt.now);
+    pushHist(it, at, LABEL[field], it[field], v);
+    it[field] = v;
+    if (BLOCK_FIELDS.includes(field)) it.edited[field] = true;
+    it.updatedAt = at;
+    return true;
+  }
+
+  // 回答を画面で直したとき：表を読み直し、手で直した行の状態は残す
+  function editAnswer(db, id, answer, opt = {}) {
+    const it = find(db, id);
+    if (!it || it.answer === answer) return null;
+    const at = nowIso(opt.now);
+    const warnings = [];
+    const tables = P().readTables(answer, warnings);
+    pushHist(it, at, LABEL.answer, "", "回答を編集");
+    it.answer = answer;
+    warnings.push(...mergeTables(it, tables, at));
+    it.updatedAt = at;
+    return warnings;
+  }
+
+  function editRow(db, id, t, key, state, opt = {}) {
+    const it = find(db, id);
+    const tb = it && it.tables[t];
+    const r = tb && tb.stateCol >= 0 && tb.rows.find((x) => x.key === key);
+    if (!r) return false;
+    const v = P().normState(state).state;
+    if (r.state === v) return false;
+    const at = nowIso(opt.now);
+    pushHist(it, at, `表${t + 1}「${key}」の状態`, r.state, v);
+    r.state = v;
+    r.edited = true;
+    r.cells[tb.stateCol] = v;
+    it.updatedAt = at;
+    return true;
+  }
+
+  function remove(db, id) {
+    const i = db.items.findIndex((x) => x.id === id);
+    if (i < 0) return false;
+    db.items.splice(i, 1);
+    return true;
+  }
+
+  // ---------- 検索・絞り込み ----------
+  const textOf = (it) => [it.id, it.project, it.category, it.status, it.source, it.reason, it.question, it.answer, it.owner, it.memo].join("\n");
+  const norm = (s) => String(s || "").normalize("NFKC").toLowerCase();
+  const isOverdue = (it, day) => !!it.due && it.due < day && it.status !== "確定";
+
+  // f = { text, status, project, category, owner, overdue, sort, today }
+  function filter(db, f = {}) {
+    const words = norm(f.text).split(/\s+/).filter(Boolean);
+    const day = f.today || today();
+    const list = db.items.filter((it) => {
+      if (f.status && it.status !== f.status) return false;
+      if (f.project && it.project !== f.project) return false;
+      if (f.category && it.category !== f.category) return false;
+      if (f.owner && it.owner !== f.owner) return false;
+      if (f.overdue && !isOverdue(it, day)) return false;
+      if (words.length) { const t = norm(textOf(it)); if (!words.every((w) => t.includes(w))) return false; }
+      return true;
+    });
+    const order = { 要確認: 0, 提案: 1, 対応中: 2, 未確定: 3, 確定: 4 };
+    const by = {
+      id: (a, b) => a.id.localeCompare(b.id),
+      updated: (a, b) => b.updatedAt.localeCompare(a.updatedAt),
+      due: (a, b) => (a.due || "9999").localeCompare(b.due || "9999") || a.id.localeCompare(b.id),
+      status: (a, b) => order[a.status] - order[b.status] || a.id.localeCompare(b.id),
+    }[f.sort || "id"];
+    return list.sort(by);
+  }
+
+  // 全質問の表の行（状態の列がある表だけ）
+  function rows(db) {
+    const out = [];
+    for (const it of db.items) {
+      it.tables.forEach((t, k) => {
+        if (t.stateCol < 0) return;
+        for (const r of t.rows) out.push({ id: it.id, project: it.project, table: k, head: t.head, stateCol: t.stateCol, key: r.key, state: r.state, cells: r.cells, edited: r.edited });
+      });
+    }
+    return out;
+  }
+  function filterRows(list, f = {}) {
+    const words = norm(f.text).split(/\s+/).filter(Boolean);
+    return list.filter((r) => {
+      if (f.status && r.state !== f.status) return false;
+      if (f.project && r.project !== f.project) return false;
+      if (words.length) { const t = norm([r.id, r.project, ...r.cells].join("\n")); if (!words.every((w) => t.includes(w))) return false; }
+      return true;
+    });
+  }
+
+  function counts(list, get) {
+    const c = Object.fromEntries(P().STATES.map((s) => [s, 0]));
+    for (const x of list) c[get(x)] = (c[get(x)] || 0) + 1;
+    return c;
+  }
+  const values = (db, k) => [...new Set(db.items.map((x) => x[k]).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja"));
+
+  // ---------- 書き出し ----------
+  const csvCell = (v) => { const s = String(v == null ? "" : v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = (rowsArr) => "\uFEFF" + rowsArr.map((r) => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  const ITEM_COLS = ["ID", "案件", "分類", "質問", "回答", "状態", "根拠ソース", "要確認の理由", "担当", "期限", "日付", "メモ", "更新日時"];
+  function itemsCsv(items) {
+    return csv([ITEM_COLS, ...items.map((it) => [it.id, it.project, it.category, it.question, it.answer, it.status, it.source, it.reason, it.owner, it.due, it.date, it.memo, it.updatedAt])]);
+  }
+  function rowsCsv(list) {
+    return csv([["ID", "案件", "表", "項目", "状態", "内容"], ...list.map((r) => [r.id, r.project, "表" + (r.table + 1), r.key, r.state, r.head.map((h, c) => (c === 0 || c === r.stateCol ? null : `${h}: ${r.cells[c] || ""}`)).filter(Boolean).join(" / ")])]);
+  }
+  // スプレッドシートにそのまま貼れるタブ区切り。セルの中のタブと改行は空白にする
+  function tableTsv(t) {
+    const cell = (s) => String(s == null ? "" : s).replace(/\*\*|`/g, "").replace(/<br\s*\/?>/gi, " ").replace(/[\t\r\n]+/g, " ");
+    return [t.head, ...t.rows.map((r) => r.cells)].map((r) => r.map(cell).join("\t")).join("\n") + "\n";
+  }
+
+  function toJson(db, opt = {}) {
+    return JSON.stringify({ app: "qa-box", version: VERSION, exportedAt: nowIso(opt.now), items: db.items }, null, 2);
+  }
+  // 読み込み。形が違えば Error
+  function fromJson(text) {
+    let d;
+    try { d = JSON.parse(String(text).replace(/^\uFEFF/, "")); } catch (e) { throw new Error("JSON として読めません"); }
+    if (!d || d.app !== "qa-box" || !Array.isArray(d.items)) throw new Error("質問箱の書き出しファイルではありません");
+    if (d.version > VERSION) throw new Error(`新しい版（version ${d.version}）のファイルです。質問箱の HTML を新しくしてください`);
+    const ids = new Set();
+    const items = d.items.map((x, i) => {
+      if (!x || typeof x.id !== "string" || typeof x.question !== "string") throw new Error(`${i + 1} 件目の形が違います`);
+      if (ids.has(x.id)) throw new Error(`${x.id} が 2 回あります`);
+      ids.add(x.id);
+      const it = Object.assign({ project: "", category: "", status: "要確認", source: "", reason: "", date: "", answer: "", tables: [], owner: "", due: "", memo: "", edited: {}, history: [], createdAt: "", updatedAt: "" }, x);
+      it.status = P().normState(it.status).state;
+      return it;
+    });
+    return { version: VERSION, items };
+  }
+
+  // NotebookLM に聞き直す文
+  function reaskText(it) {
+    return `次の質問に、指定の形式で答え直してください。見出しは「## ${it.id}」のままにしてください。\n\n## ${it.id}\n### 質問\n${it.question}\n`;
+  }
+
+  GK.model = { VERSION, LABEL, EDIT_FIELDS, empty, nextId, find, plan, apply, edit, editAnswer, editRow, remove, filter, rows, filterRows, counts, values, isOverdue, itemsCsv, rowsCsv, tableTsv, toJson, fromJson, reaskText, today };
+})(globalThis.GK = globalThis.GK || {});
+
+// ---- store.js ----
+// 保存。IndexedDB（DB「qa-box」の kv、キー "db"）に db を丸ごと 1 件で置く。
+// 開けないとき（3 秒で諦める）は localStorage、それも使えなければメモリだけ（画面に出す）。
+(function (GK) {
+  "use strict";
+
+  const DB = "qa-box", DB_VER = 1, KEY = "db", LS = "qa-box.v1.db";
+  const OPEN_TIMEOUT = 3000;
+  let mode = "mem";
+  let dbp = null;
+
+  function openDb() {
+    if (dbp) return dbp;
+    dbp = new Promise((resolve, reject) => {
+      if (!globalThis.indexedDB) return reject(new Error("IndexedDB がありません"));
+      const req = indexedDB.open(DB, DB_VER);
+      req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains("kv")) req.result.createObjectStore("kv"); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error("IndexedDB を開けません"));
+      req.onblocked = () => reject(new Error("別のタブが古い版を開いています。ほかのタブを閉じてください"));
+    });
+    return dbp;
+  }
+  function tx(mode_, fn) {
+    return openDb().then((db) => new Promise((resolve, reject) => {
+      const t = db.transaction("kv", mode_);
+      const r = fn(t.objectStore("kv"));
+      t.oncomplete = () => resolve(r && "result" in r ? r.result : undefined);
+      t.onerror = () => reject(t.error);
+      t.onabort = () => reject(t.error || new Error("保存を中止しました"));
+    }));
+  }
+  const hasLocal = () => { try { return !!globalThis.localStorage; } catch (e) { return false; } };
+
+  // 戻り値：保存されていた db（無ければ null）
+  async function load() {
+    try {
+      await Promise.race([openDb(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), OPEN_TIMEOUT))]);
+      const v = await tx("readonly", (st) => st.get(KEY));
+      mode = "idb";
+      return v ? JSON.parse(v) : null;
+    } catch (e) {
+      if (hasLocal()) {
+        mode = "local";
+        const v = localStorage.getItem(LS);
+        return v ? JSON.parse(v) : null;
+      }
+      mode = "mem";
+      return null;
+    }
+  }
+
+  // 続けて呼ばれたら最後の 1 回だけ書く
+  let pending = null, timer = null, chain = Promise.resolve();
+  function save(db) {
+    pending = JSON.stringify(db);
+    clearTimeout(timer);
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        const text = pending;
+        chain = chain.then(() => write(text)).then(resolve, reject);
+      }, 150);
+    });
+  }
+  async function write(text) {
+    if (mode === "idb") return tx("readwrite", (st) => st.put(text, KEY));
+    if (mode === "local") return localStorage.setItem(LS, text);
+  }
+
+  GK.store = { load, save, mode: () => mode };
+})(globalThis.GK = globalThis.GK || {});
+
+// ---- app.js ----
+// 画面。タブ：取り込み ／ 質問の一覧 ／ 項目の一覧 ／ 使い方。
+// DOM は createElement / textContent だけで組む（貼った文字列を HTML として解釈しない）。
+(function (GK) {
+  "use strict";
+
+  const { el, download, copyText, flash } = GK.dom;
+  const M = GK.model, P = GK.parse;
+  const STATES = P.STATES;
+  const ST_CLASS = { 確定: "st-ok", 未確定: "st-tbd", 提案: "st-prop", 対応中: "st-doing", 要確認: "st-check" };
+
+  const S = {
+    db: M.empty(),
+    tab: "list",
+    plan: null, asNew: new Set(), importProject: "",
+    f: { text: "", status: "", project: "", category: "", owner: "", overdue: false, sort: "id" },
+    rf: { text: "", status: "", project: "" },
+    open: null, editAnswer: false, confirmDelete: null,
+    pendingJson: null,
+  };
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- 保存 ----------
+  function save(msg) {
+    setSaveState("保存中…");
+    GK.store.save(S.db).then(
+      () => setSaveState(msg || saveLabel()),
+      (e) => setSaveState("保存できませんでした：" + (e && e.message ? e.message : e), true),
+    );
+  }
+  const saveLabel = () => ({ idb: "ブラウザ内に保存済み", local: "ブラウザ内に保存済み（localStorage）", mem: "保存できません（閉じると消えます。JSON で書き出してください）" })[GK.store.mode()];
+  function setSaveState(text, bad) {
+    const n = $("save-state");
+    n.textContent = text;
+    n.classList.toggle("bad", !!bad || GK.store.mode() === "mem");
+  }
+
+  // ---------- 部品 ----------
+  const badge = (st) => el("span", { class: "st " + (ST_CLASS[st] || "") }, st || "—");
+  function stateSelect(value, onChange, label) {
+    const s = el("select", { class: "st-select " + (ST_CLASS[value] || ""), "aria-label": label || "状態" }, STATES.map((x) => el("option", { value: x }, x)));
+    s.value = value;
+    s.addEventListener("change", () => onChange(s.value));
+    return s;
+  }
+  function select(options, value, onChange, label, emptyLabel) {
+    const s = el("select", { "aria-label": label }, el("option", { value: "" }, emptyLabel || "すべて"), options.map((x) => el("option", { value: x }, x)));
+    s.value = value;
+    s.addEventListener("change", () => onChange(s.value));
+    return s;
+  }
+  function countBar(counts, active, onPick) {
+    const total = STATES.reduce((a, s) => a + (counts[s] || 0), 0);
+    const bar = el("div", { class: "bar", role: "img", "aria-label": STATES.map((s) => `${s} ${counts[s] || 0} 件`).join("、") });
+    for (const s of STATES) if (counts[s]) bar.append(el("span", { class: "seg " + ST_CLASS[s], style: `flex:${counts[s]}` }));
+    const chips = el("div", { class: "chips" },
+      el("button", { class: "chip" + (!active ? " on" : ""), onclick: () => onPick("") }, `すべて ${total}`),
+      STATES.map((s) => el("button", { class: "chip " + ST_CLASS[s] + (active === s ? " on" : ""), onclick: () => onPick(active === s ? "" : s) }, `${s} ${counts[s] || 0}`)));
+    return el("div", { class: "counts" }, total ? bar : null, chips);
+  }
+  const fmtAt = (iso) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
+  const short = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n) + "…" : t; };
+
+  // 回答の Markdown を描く。k 番目の表は item.tables[k] から描き、行の状態を編集できるようにする
+  function renderAnswer(it) {
+    let k = 0;
+    return GK.md.render(it.answer, {
+      table: (node) => {
+        const t = it.tables[k];
+        const idx = k++;
+        if (!t) return node;
+        return tableView(it, t, idx);
+      },
+    });
+  }
+  function tableView(it, t, k) {
+    const head = el("tr", null, t.head.map((h) => el("th", null, h)));
+    const body = t.rows.map((r) => el("tr", null, r.cells.map((c, ci) => {
+      if (ci === t.stateCol) {
+        return el("td", { class: "st-cell" }, stateSelect(r.state, (v) => {
+          M.editRow(S.db, it.id, k, r.key, v);
+          save();
+          render();
+        }, `${r.key} の状態`), r.edited ? el("span", { class: "edited", title: "手で直した状態。貼り直しても残ります" }, "手") : null);
+      }
+      const td = el("td");
+      GK.md.inline(c, td);
+      return td;
+    })));
+    const copyBtn = el("button", { class: "small", type: "button" }, "表をコピー（スプレッドシートに貼れる形）");
+    copyBtn.addEventListener("click", async () => flash(copyBtn, (await copyText(M.tableTsv(t))) ? "コピーしました" : "コピーできませんでした"));
+    const note = t.stateCol < 0 ? el("span", { class: "muted" }, "この表には「状態」の列がありません") : null;
+    return el("div", { class: "qtable" }, el("div", { class: "tablewrap" }, el("table", null, el("thead", null, head), el("tbody", null, body))), el("div", { class: "row-actions" }, copyBtn, note));
+  }
+
+  // ---------- タブ ----------
+  const TABS = [["import", "取り込み"], ["list", "質問の一覧"], ["rows", "項目の一覧"], ["help", "使い方"]];
+  function renderTabs() {
+    const nav = $("tabs");
+    nav.replaceChildren(...TABS.map(([id, label]) => el("button", {
+      class: "tab" + (S.tab === id ? " on" : ""), role: "tab", "aria-selected": S.tab === id ? "true" : "false",
+      onclick: () => { S.tab = id; render(); },
+    }, label)));
+  }
+
+  function render() {
+    renderTabs();
+    const main = $("main");
+    const view = { import: viewImport, list: viewList, rows: viewRows, help: viewHelp }[S.tab]();
+    main.replaceChildren(view);
+  }
+
+  // ---------- 取り込み ----------
+  function viewImport() {
+    const ta = el("textarea", { id: "paste", rows: "12", placeholder: "NotebookLM の回答（```markdown の囲みごと）をここに貼ります。1 問でも複数問でも同じです", "aria-label": "NotebookLM の回答" });
+    ta.value = S.pasteText || "";
+    ta.addEventListener("input", () => { S.pasteText = ta.value; });
+    const proj = el("input", { type: "text", list: "dl-project", value: S.importProject, placeholder: "空欄ならブロックの「案件」", "aria-label": "案件" });
+    proj.addEventListener("input", () => { S.importProject = proj.value; });
+    const read = el("button", { class: "primary", type: "button", onclick: () => {
+      S.plan = M.plan(S.db, ta.value, { project: S.importProject });
+      S.asNew = new Set();
+      render();
+    } }, "読み取る");
+    const copyPrompt = el("button", { type: "button" }, "NotebookLM に貼る指示をコピー");
+    copyPrompt.addEventListener("click", async () => flash(copyPrompt, (await copyText(GK.PROMPT)) ? "コピーしました" : "コピーできませんでした"));
+    const box = el("section", { class: "card" },
+      el("h2", null, "NotebookLM の回答を取り込む"),
+      el("p", { class: "muted" }, "回答を貼って「読み取る」→ 中身を確かめて「取り込む」。同じ ID（Q-012 など）は更新になります。"),
+      el("label", { class: "field" }, el("span", null, "案件"), proj, datalist("dl-project", M.values(S.db, "project"))),
+      ta,
+      el("div", { class: "row-actions" }, read, copyPrompt));
+    return el("div", null, box, S.plan ? previewView() : null);
+  }
+
+  function datalist(id, values) { return el("datalist", { id }, values.map((v) => el("option", { value: v }))); }
+
+  function previewView() {
+    const pl = S.plan;
+    const nNew = pl.entries.filter((e, i) => e.action === "new" || S.asNew.has(i)).length;
+    const nUpd = pl.entries.length - nNew;
+    const list = pl.entries.map((e, i) => {
+      const upd = e.action === "update" && !S.asNew.has(i);
+      const cb = e.action === "update" ? el("label", { class: "inline" }, (() => {
+        const c = el("input", { type: "checkbox" });
+        c.checked = S.asNew.has(i);
+        c.addEventListener("change", () => { if (c.checked) S.asNew.add(i); else S.asNew.delete(i); render(); });
+        return c;
+      })(), "新規として追加") : null;
+      const rowsN = e.block.tables.reduce((a, t) => a + (t.stateCol >= 0 ? t.rows.length : 0), 0);
+      return el("li", { class: "pv" + (e.warnings.length ? " warn" : "") },
+        el("div", { class: "pv-head" },
+          el("span", { class: "tag " + (upd ? "upd" : "new") }, upd ? "更新" : "新規"),
+          el("strong", null, upd ? e.id : (e.action === "new" ? e.id : "新しい番号")),
+          badge(e.block.fields.status),
+          el("span", null, short(e.block.question, 60)),
+          rowsN ? el("span", { class: "muted" }, `表の項目 ${rowsN}`) : null,
+          cb),
+        e.action === "update" && P.keyOf(e.question) !== P.keyOf(e.block.question) ? el("div", { class: "muted" }, "前の質問：" + short(e.question, 60)) : null,
+        e.warnings.length ? el("ul", { class: "warns" }, e.warnings.map((w) => el("li", null, w))) : null);
+    });
+    const bad = pl.bad.length ? el("div", { class: "bad-blocks" }, el("h3", null, `読めないブロック ${pl.bad.length}（取り込みません）`),
+      el("ul", null, pl.bad.map((b) => el("li", null, `${b.label}（${b.line} 行目）：${b.error}`)))) : null;
+    const go = el("button", { class: "primary", type: "button", disabled: pl.entries.length ? null : true, onclick: () => {
+      const done = M.apply(S.db, pl, { project: S.importProject, asNew: [...S.asNew] });
+      S.plan = null;
+      S.pasteText = "";
+      S.lastDone = done;
+      save(`取り込みました（新規 ${done.added.length}・更新 ${done.updated.length}）`);
+      S.tab = "list";
+      S.f = Object.assign({}, S.f, { text: "", status: "" });
+      render();
+    } }, "取り込む");
+    const empty = !pl.entries.length && !pl.bad.length
+      ? el("p", { class: "warn-text" }, "ブロックが見つかりません。「## 新規」または「## Q-012」の行と、その下の「状態:」「### 質問」「### 回答」が要ります。NotebookLM に指示を貼ってから聞き直してください")
+      : null;
+    return el("section", { class: "card" },
+      el("h2", null, `読み取り結果：新規 ${nNew} 件・更新 ${nUpd} 件`),
+      empty, el("ul", { class: "pvlist" }, list), bad,
+      el("div", { class: "row-actions" }, go, el("button", { type: "button", onclick: () => { S.plan = null; render(); } }, "やめる")));
+  }
+
+  // ---------- 質問の一覧 ----------
+  function viewList() {
+    const f = S.f;
+    const list = M.filter(S.db, f);
+    const set = (k) => (v) => { S.f[k] = v; render(); };
+    const search = el("input", { type: "search", value: f.text, placeholder: "検索（表の中も）", "aria-label": "検索" });
+    search.addEventListener("input", () => { S.f.text = search.value; renderListBody(); });
+    const overdue = el("label", { class: "inline" }, (() => { const c = el("input", { type: "checkbox" }); c.checked = f.overdue; c.addEventListener("change", () => set("overdue")(c.checked)); return c; })(), "期限切れだけ");
+    const sort = el("select", { "aria-label": "並べ替え" }, [["id", "ID 順"], ["updated", "更新が新しい順"], ["due", "期限が近い順"], ["status", "要確認から"]].map(([v, l]) => el("option", { value: v }, l)));
+    sort.value = f.sort;
+    sort.addEventListener("change", () => set("sort")(sort.value));
+    const all = S.db.items;
+    const toolbar = el("div", { class: "toolbar" },
+      search,
+      select(M.values(S.db, "project"), f.project, set("project"), "案件", "案件：すべて"),
+      select(M.values(S.db, "category"), f.category, set("category"), "分類", "分類：すべて"),
+      select(M.values(S.db, "owner"), f.owner, set("owner"), "担当", "担当：すべて"),
+      overdue, sort,
+      el("button", { type: "button", onclick: () => download(`質問箱_${M.today()}.csv`, M.itemsCsv(M.filter(S.db, S.f)), "text/csv;charset=utf-8") }, "表示中を CSV"));
+    const base = M.filter(S.db, Object.assign({}, f, { status: "" }));
+    const head = el("div", { class: "card" }, countBar(M.counts(base, (x) => x.status), f.status, set("status")), toolbar);
+    const body = el("div", { id: "list-body" });
+    S._listBody = body;
+    if (!all.length) {
+      body.append(el("section", { class: "card empty" }, el("p", null, "まだ質問がありません。"), el("button", { class: "primary", type: "button", onclick: () => { S.tab = "import"; render(); } }, "取り込みへ")));
+      return el("div", null, body);
+    }
+    fillList(body, list);
+    return el("div", null, head, body);
+  }
+  function renderListBody() {
+    if (!S._listBody) return;
+    fillList(S._listBody, M.filter(S.db, S.f));
+  }
+  function fillList(body, list) {
+    const day = M.today();
+    const rowsEls = [];
+    for (const it of list) {
+      const open = S.open === it.id;
+      const checkN = it.tables.reduce((a, t) => a + t.rows.filter((r) => t.stateCol >= 0 && r.state !== "確定").length, 0);
+      const inp = (field, type, label) => {
+        const n = el("input", { type, value: it[field] || "", "aria-label": `${it.id} の${label}` });
+        n.addEventListener("change", () => { if (M.edit(S.db, it.id, field, n.value)) save(); if (field === "due") render(); });
+        return n;
+      };
+      const tr = el("tr", { class: open ? "open" : "" },
+        el("td", { class: "id" }, el("button", { class: "link", type: "button", "aria-expanded": open ? "true" : "false", onclick: () => { S.open = open ? null : it.id; S.editAnswer = false; S.confirmDelete = null; render(); } }, (open ? "▾ " : "▸ ") + it.id)),
+        el("td", null, stateSelect(it.status, (v) => { M.edit(S.db, it.id, "status", v); save(); render(); }, `${it.id} の状態`), it.edited.status ? el("span", { class: "edited", title: "手で直した状態。貼り直しても残ります" }, "手") : null),
+        el("td", { class: "q" }, el("button", { class: "link q-link", type: "button", onclick: () => { S.open = open ? null : it.id; S.editAnswer = false; render(); } }, short(it.question, 70)),
+          el("div", { class: "muted" }, [it.project, it.category].filter(Boolean).join(" ／ "))),
+        el("td", { class: "num" }, checkN ? el("span", { class: "st st-check", title: "表の中で確定していない項目" }, `未確定 ${checkN}`) : ""),
+        el("td", null, inp("owner", "text", "担当")),
+        el("td", { class: M.isOverdue(it, day) ? "overdue" : "" }, inp("due", "date", "期限"), M.isOverdue(it, day) ? el("span", { class: "overdue-label" }, "期限切れ") : null),
+        el("td", null, inp("memo", "text", "メモ")),
+        el("td", { class: "muted nowrap" }, fmtAt(it.updatedAt)));
+      rowsEls.push(tr);
+      if (open) rowsEls.push(el("tr", { class: "detail-row" }, el("td", { colspan: "8" }, detailView(it))));
+    }
+    const table = el("table", { class: "grid" },
+      el("thead", null, el("tr", null, ["ID", "状態", "質問", "表", "担当", "期限", "メモ", "更新"].map((h) => el("th", null, h)))),
+      el("tbody", null, rowsEls));
+    body.replaceChildren(el("section", { class: "card" },
+      el("div", { class: "muted" }, `${list.length} 件 ／ 全 ${S.db.items.length} 件`),
+      list.length ? el("div", { class: "tablewrap" }, table) : el("p", null, "条件に合う質問はありません")));
+  }
+
+  function detailView(it) {
+    const field = (k, label, type) => {
+      const n = el(type === "area" ? "textarea" : "input", type === "area" ? { rows: "3", "aria-label": label } : { type: "text", value: it[k] || "", "aria-label": label });
+      if (type === "area") n.value = it[k] || "";
+      n.addEventListener("change", () => { if (M.edit(S.db, it.id, k, n.value)) { save(); render(); } });
+      return el("label", { class: "field" }, el("span", null, label, it.edited[k] ? el("span", { class: "edited", title: "手で直した値。貼り直しても残ります" }, "手") : null), n);
+    };
+    const meta = el("div", { class: "meta-grid" },
+      field("project", "案件"), field("category", "分類"), field("source", "根拠"), field("date", "日付"), field("reason", "要確認の理由"));
+    let answer;
+    if (S.editAnswer) {
+      const ta = el("textarea", { rows: "14", "aria-label": "回答（Markdown）" });
+      ta.value = it.answer;
+      answer = el("div", null, ta, el("div", { class: "row-actions" },
+        el("button", { class: "primary", type: "button", onclick: () => {
+          const w = M.editAnswer(S.db, it.id, ta.value);
+          S.editAnswer = false;
+          S.answerWarn = w && w.length ? w : null;
+          save();
+          render();
+        } }, "回答を保存"),
+        el("button", { type: "button", onclick: () => { S.editAnswer = false; render(); } }, "やめる")));
+    } else {
+      answer = el("div", null, renderAnswer(it), S.answerWarn ? el("ul", { class: "warns" }, S.answerWarn.map((w) => el("li", null, w))) : null);
+      S.answerWarn = null;
+    }
+    const reask = el("button", { type: "button" }, "聞き直す文をコピー");
+    reask.addEventListener("click", async () => flash(reask, (await copyText(M.reaskText(it))) ? "コピーしました。NotebookLM に貼ってください" : "コピーできませんでした", 2400));
+    const del = el("button", { class: "danger", type: "button", onclick: () => {
+      if (S.confirmDelete === it.id) { M.remove(S.db, it.id); S.open = null; S.confirmDelete = null; save(`${it.id} を削除しました`); render(); }
+      else { S.confirmDelete = it.id; render(); }
+    } }, S.confirmDelete === it.id ? "もう一度押すと削除します" : "この質問を削除");
+    const hist = el("details", { class: "hist" }, el("summary", null, `履歴 ${it.history.length}`),
+      el("ul", null, it.history.slice().reverse().map((h) => el("li", null, el("span", { class: "muted nowrap" }, fmtAt(h.at)), ` ${h.field}：`, h.from ? `${short(h.from, 40)} → ` : "", short(h.to, 40)))));
+    return el("div", { class: "detail" },
+      meta,
+      field("question", "質問", "area"),
+      el("div", { class: "answer-head" }, el("h3", null, "回答"), S.editAnswer ? null : el("button", { class: "small", type: "button", onclick: () => { S.editAnswer = true; render(); } }, "回答を編集")),
+      answer,
+      el("div", { class: "row-actions" }, reask, del),
+      hist);
+  }
+
+  // ---------- 項目の一覧 ----------
+  function viewRows() {
+    const all = M.rows(S.db);
+    const set = (k) => (v) => { S.rf[k] = v; render(); };
+    if (!all.length) return el("section", { class: "card empty" }, el("p", null, "表の項目はまだありません。回答の表に「状態」列があると、ここに行ごとに並びます。"));
+    const search = el("input", { type: "search", value: S.rf.text, placeholder: "検索（項目名・内容）", "aria-label": "検索" });
+    const body = el("div");
+    const fill = () => {
+      const list = M.filterRows(all, S.rf);
+      const table = el("table", { class: "grid" },
+        el("thead", null, el("tr", null, ["ID", "案件", "表", "項目", "状態", "内容"].map((h) => el("th", null, h)))),
+        el("tbody", null, list.map((r) => el("tr", null,
+          el("td", { class: "id" }, el("button", { class: "link", type: "button", onclick: () => { S.tab = "list"; S.open = r.id; S.f = Object.assign({}, S.f, { text: "", status: "", project: "", category: "", owner: "", overdue: false }); render(); } }, r.id)),
+          el("td", null, r.project),
+          el("td", { class: "nowrap" }, "表" + (r.table + 1)),
+          el("td", null, el("strong", null, r.key)),
+          el("td", null, stateSelect(r.state, (v) => { M.editRow(S.db, r.id, r.table, r.key, v); save(); render(); }, `${r.key} の状態`), r.edited ? el("span", { class: "edited", title: "手で直した状態" }, "手") : null),
+          el("td", { class: "muted" }, r.head.map((h, c) => (c === 0 || c === r.stateCol || !r.cells[c] ? null : `${h}: ${r.cells[c]}`)).filter(Boolean).join(" ／ "))))));
+      body.replaceChildren(el("section", { class: "card" }, el("div", { class: "muted" }, `${list.length} 行 ／ 全 ${all.length} 行`), list.length ? el("div", { class: "tablewrap" }, table) : el("p", null, "条件に合う項目はありません")));
+    };
+    search.addEventListener("input", () => { S.rf.text = search.value; fill(); });
+    fill();
+    const base = M.filterRows(all, Object.assign({}, S.rf, { status: "" }));
+    return el("div", null,
+      el("div", { class: "card" }, countBar(M.counts(base, (r) => r.state), S.rf.status, set("status")),
+        el("div", { class: "toolbar" }, search, select([...new Set(all.map((r) => r.project).filter(Boolean))].sort(), S.rf.project, set("project"), "案件", "案件：すべて"),
+          el("button", { type: "button", onclick: () => download(`質問箱_項目_${M.today()}.csv`, M.rowsCsv(M.filterRows(all, S.rf)), "text/csv;charset=utf-8") }, "表示中を CSV"))),
+      body);
+  }
+
+  // ---------- 使い方 ----------
+  function viewHelp() {
+    const copy = el("button", { class: "primary", type: "button" }, "指示をコピー");
+    copy.addEventListener("click", async () => flash(copy, (await copyText(GK.PROMPT)) ? "コピーしました" : "コピーできませんでした"));
+    return el("div", null,
+      el("section", { class: "card" }, el("h2", null, "使い方"),
+        el("ol", { class: "steps" },
+          el("li", null, el("strong", null, "指示を入れる："), "下の指示をコピーし、NotebookLM の「チャットを設定」（カスタム指示）に貼ります。1 回だけでよい"),
+          el("li", null, el("strong", null, "質問する："), "1 問でもまとめてでも。回答は ```markdown の囲みで返ってきます"),
+          el("li", null, el("strong", null, "取り込む："), "回答をまるごとコピーし、「取り込み」タブに貼って「読み取る」→「取り込む」"),
+          el("li", null, el("strong", null, "管理する："), "「質問の一覧」で状態・担当・期限・メモを直す。表の行ごとの状態は質問を開くか「項目の一覧」で直す"),
+          el("li", null, el("strong", null, "聞き直す："), "質問を開いて「聞き直す文をコピー」→ NotebookLM に貼る。同じ ID で返るので、取り込むと更新になります（手で直した値は残ります）"),
+          el("li", null, el("strong", null, "控え："), "右上の「書き出し」で JSON を保存。別の PC やブラウザでは「読み込み」")),
+        el("p", { class: "muted" }, "保存先はこのブラウザの中だけです。ネットワークには出ません。ブラウザのデータを消すと消えるので、ときどき書き出してください。")),
+      el("section", { class: "card" }, el("div", { class: "answer-head" }, el("h2", null, "NotebookLM に貼る指示"), copy), el("pre", { class: "prompt" }, GK.PROMPT)));
+  }
+
+  // ---------- 書き出し・読み込み ----------
+  function setupIO() {
+    $("btn-export").addEventListener("click", () => download(`質問箱_${M.today()}.json`, M.toJson(S.db), "application/json"));
+    const file = $("file-json");
+    $("btn-import").addEventListener("click", () => file.click());
+    file.addEventListener("change", async () => {
+      const f = file.files && file.files[0];
+      file.value = "";
+      if (!f) return;
+      try {
+        S.pendingJson = M.fromJson(await f.text());
+        showConfirm();
+      } catch (e) {
+        showConfirm(e.message);
+      }
+    });
+  }
+  function showConfirm(error) {
+    const box = $("confirm");
+    if (error) {
+      box.replaceChildren(el("span", { class: "warn-text" }, "読み込めません：" + error), el("button", { type: "button", onclick: () => box.replaceChildren() }, "閉じる"));
+      return;
+    }
+    box.replaceChildren(
+      el("span", null, `${S.pendingJson.items.length} 件で置き換えます。今の ${S.db.items.length} 件は消えます。`),
+      el("button", { class: "danger", type: "button", onclick: () => { S.db = S.pendingJson; S.pendingJson = null; S.open = null; box.replaceChildren(); save("読み込みました"); render(); } }, "置き換える"),
+      el("button", { type: "button", onclick: () => { S.pendingJson = null; box.replaceChildren(); } }, "やめる"));
+  }
+
+  async function start() {
+    setupIO();
+    try {
+      const saved = await GK.store.load();
+      if (saved) S.db = M.fromJson(JSON.stringify(Object.assign({ app: "qa-box" }, saved)));
+    } catch (e) {
+      setSaveState("保存データを読めませんでした：" + e.message, true);
+    }
+    if (!S.db.items.length) S.tab = "help";
+    setSaveState(saveLabel());
+    render();
+  }
+
+  GK.app = { start, state: S };
+  if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", start);
+})(globalThis.GK = globalThis.GK || {});
+
+</script>
+</body>
+</html>
