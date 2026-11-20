@@ -877,6 +877,57 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
   function toJson(db, opt = {}) {
     return JSON.stringify({ app: "qa-box", version: VERSION, exportedAt: nowIso(opt.now), items: db.items }, null, 2);
   }
+  // AI に渡す用の JSON。控え（toJson）と違い、履歴・手で直した印・作成日時は入れず、空の値は省く。
+  // 表の行は列名をキーにした形にする。読み込み（fromJson）では読めない
+  const STATE_NOTE = {
+    確定: "ソースに明記されていて、決まっている",
+    未確定: "ソースに案や候補はあるが、決まっていない",
+    提案: "ソースに決まりも案も無く、NotebookLM が考えた案",
+    対応中: "誰かが調べている・作っている",
+    要確認: "ソースに書かれていない、またはソースどうしが食い違う",
+  };
+  function aiTable(t) {
+    // 同じ列名が 2 つあればキーに番号を付ける
+    const seen = {};
+    const keys = t.head.map((h, c) => {
+      const k = String(h || "").trim() || `列${c + 1}`;
+      seen[k] = (seen[k] || 0) + 1;
+      return seen[k] > 1 ? `${k}(${seen[k]})` : k;
+    });
+    return {
+      columns: keys,
+      hasState: t.stateCol >= 0,
+      rows: t.rows.map((r) => {
+        const o = Object.fromEntries(keys.map((k, c) => [k, r.cells[c] == null ? "" : r.cells[c]]));
+        if (t.stateCol >= 0) o[keys[t.stateCol]] = r.state;
+        return o;
+      }),
+    };
+  }
+  function aiItem(it) {
+    const o = { id: it.id };
+    const put = (k, v) => { if (v != null && v !== "") o[k] = v; };
+    put("project", it.project); put("category", it.category); put("status", it.status);
+    put("question", it.question); put("answer", it.answer);
+    put("source", it.source); put("reason", it.reason);
+    put("owner", it.owner); put("due", it.due); put("memo", it.memo);
+    put("date", it.date); put("updatedAt", it.updatedAt);
+    if (it.tables && it.tables.length) o.tables = it.tables.map(aiTable);
+    return o;
+  }
+  function toAiJson(items, opt = {}) {
+    const c = counts(items, (x) => x.status);
+    return JSON.stringify({
+      format: "qa-box.ai.v1",
+      about: "NotebookLM に聞いた質問と回答。status は質問全体の状態、tables[].rows の「状態」は表の行ごとの状態。answer は Markdown",
+      exportedAt: nowIso(opt.now),
+      states: STATE_NOTE,
+      counts: Object.fromEntries(Object.entries(c).filter(([, n]) => n)),
+      fields: { project: "案件", category: "分類", status: "状態", source: "根拠", reason: "要確認の理由", owner: "担当", due: "期限", memo: "メモ", date: "日付" },
+      items: items.map(aiItem),
+    }, null, 2);
+  }
+
   // 読み込み。形が違えば Error
   function fromJson(text) {
     let d;
@@ -900,7 +951,7 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     return `次の質問に、指定の形式で答え直してください。見出しは「## ${it.id}」のままにしてください。\n\n## ${it.id}\n### 質問\n${it.question}\n`;
   }
 
-  GK.model = { VERSION, LABEL, EDIT_FIELDS, empty, nextId, find, plan, apply, edit, editAnswer, editRow, remove, filter, rows, filterRows, counts, values, isOverdue, itemsCsv, rowsCsv, tableTsv, toJson, fromJson, reaskText, today };
+  GK.model = { VERSION, LABEL, EDIT_FIELDS, empty, nextId, find, plan, apply, edit, editAnswer, editRow, remove, filter, rows, filterRows, counts, values, isOverdue, itemsCsv, rowsCsv, tableTsv, toJson, toAiJson, fromJson, reaskText, today };
 })(globalThis.GK = globalThis.GK || {});
 
 // ---- store.js ----
@@ -1169,13 +1220,17 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     sort.value = f.sort;
     sort.addEventListener("change", () => set("sort")(sort.value));
     const all = S.db.items;
+    const aiCopy = el("button", { type: "button", title: "表示中の質問・回答・状態を AI に貼れる JSON でコピー" }, "表示中を AI 用 JSON でコピー");
+    aiCopy.addEventListener("click", async () => flash(aiCopy, (await copyText(M.toAiJson(M.filter(S.db, S.f)))) ? "コピーしました" : "コピーできませんでした"));
     const toolbar = el("div", { class: "toolbar" },
       search,
       select(M.values(S.db, "project"), f.project, set("project"), "案件", "案件：すべて"),
       select(M.values(S.db, "category"), f.category, set("category"), "分類", "分類：すべて"),
       select(M.values(S.db, "owner"), f.owner, set("owner"), "担当", "担当：すべて"),
       overdue, sort,
-      el("button", { type: "button", onclick: () => download(`質問箱_${M.today()}.csv`, M.itemsCsv(M.filter(S.db, S.f)), "text/csv;charset=utf-8") }, "表示中を CSV"));
+      el("button", { type: "button", onclick: () => download(`質問箱_${M.today()}.csv`, M.itemsCsv(M.filter(S.db, S.f)), "text/csv;charset=utf-8") }, "表示中を CSV"),
+      el("button", { type: "button", title: "表示中の質問・回答・状態を AI に渡す JSON で保存（控えの書き出しとは別。読み込みには使えません）", onclick: () => download(`質問箱_AI用_${M.today()}.json`, M.toAiJson(M.filter(S.db, S.f)), "application/json") }, "表示中を AI 用 JSON"),
+      aiCopy);
     const base = M.filter(S.db, Object.assign({}, f, { status: "" }));
     const head = el("div", { class: "card" }, countBar(M.counts(base, (x) => x.status), f.status, set("status")), toolbar);
     const body = el("div", { id: "list-body" });
@@ -1308,7 +1363,8 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
           el("li", null, el("strong", null, "取り込む："), "回答をまるごとコピーし、「取り込み」タブに貼って「読み取る」→「取り込む」"),
           el("li", null, el("strong", null, "管理する："), "「質問の一覧」で状態・担当・期限・メモを直す。表の行ごとの状態は質問を開くか「項目の一覧」で直す"),
           el("li", null, el("strong", null, "聞き直す："), "質問を開いて「聞き直す文をコピー」→ NotebookLM に貼る。同じ ID で返るので、取り込むと更新になります（手で直した値は残ります）"),
-          el("li", null, el("strong", null, "控え："), "右上の「書き出し」で JSON を保存。別の PC やブラウザでは「読み込み」")),
+          el("li", null, el("strong", null, "控え："), "右上の「書き出し」で JSON を保存。別の PC やブラウザでは「読み込み」"),
+          el("li", null, el("strong", null, "AI に渡す："), "「質問の一覧」で絞り込んでから「表示中を AI 用 JSON」で保存するかコピー。質問・回答・状態（表の行ごとの状態も）だけが入ります。控えではないので読み込みには使えません")),
         el("p", { class: "muted" }, "保存先はこのブラウザの中だけです。ネットワークには出ません。ブラウザのデータを消すと消えるので、ときどき書き出してください。")),
       el("section", { class: "card" }, el("div", { class: "answer-head" }, el("h2", null, "NotebookLM に貼る指示"), copy), el("pre", { class: "prompt" }, GK.PROMPT)));
   }
