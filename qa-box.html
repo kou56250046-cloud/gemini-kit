@@ -104,7 +104,25 @@ td.st-cell { white-space: nowrap; }
 .pv.warn { border-color: #C9A000; background: #FFFCF0; }
 .pv-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .tag { font-size: 12px; font-weight: bold; padding: 0 6px; border-radius: 4px; color: #fff; }
-.tag.new { background: var(--link); } .tag.upd { background: #4D4D4D; }
+.tag.new { background: var(--link); } .tag.upd { background: #4D4D4D; } .tag.dup { background: #8A8A8A; }
+.pv.skip { opacity: .75; background: var(--control); }
+
+/* まとめて聞き直す */
+.reask { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.reask button.done::after { content: " ✓"; }
+
+/* 前の版との差分（色と「追加」「削除」の文字の両方で示す） */
+.cmp { margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.cmp summary { cursor: pointer; color: var(--label); font-size: 13px; }
+.diff-tag { font-size: 11px; font-weight: bold; white-space: nowrap; }
+tr.d-add > td { background: var(--ok-bg); } tr.d-add .diff-tag { color: var(--ok); }
+tr.d-del > td { background: var(--check-bg); color: var(--label); } tr.d-del .diff-tag { color: var(--check); }
+tr.d-chg .diff-tag { color: var(--doing); }
+td.d-cell { background: var(--doing-bg); }
+.cmp del { color: var(--check); } .cmp ins { color: var(--ok); text-decoration: none; font-weight: bold; }
+.dlines { font-family: Consolas, "Meiryo", monospace; font-size: 12.5px; white-space: pre-wrap; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; max-height: 360px; overflow-y: auto; }
+.dlines .l-add { background: var(--ok-bg); } .dlines .l-del { background: var(--check-bg); }
+.dlines .l-same { color: var(--label); }
 .warns { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--doing); }
 .warn-text { color: var(--check); font-weight: bold; }
 .bad-blocks { color: var(--check); }
@@ -560,6 +578,8 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
   }
 
   const keyOf = (s) => String(s || "").replace(/\*\*|`/g, "").replace(/\s+/g, " ").trim();
+  // 質問の照合キー。全角半角・大小・空白・句読点・括弧の違いは同じとみなす（似ているだけの文は別物）
+  const qkey = (s) => String(s || "").normalize("NFKC").toLowerCase().replace(/\*\*|`/g, "").replace(/[\s?？。、．.,，!！「」『』()（）\[\]【】:：;；・"'”“’‘]/g, "");
 
   // 回答の中の表を出現順に。状態の列があれば行の状態として持つ
   function readTables(answer, warnings) {
@@ -599,16 +619,20 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     return { ok: blocks.filter((b) => b.ok), bad: blocks.filter((b) => !b.ok) };
   }
 
-  GK.parse = { STATES, FALLBACK, META, unwrap, normState, normId, splitBlocks, readBlock, readTables, read, keyOf };
+  GK.parse = { STATES, FALLBACK, META, unwrap, normState, normId, splitBlocks, readBlock, readTables, read, keyOf, qkey };
 })(globalThis.GK = globalThis.GK || {});
 
 // ---- model.js ----
 // 質問箱のデータ（db）の操作。DOM を使わない（テストで読む）。
-// db = { version: 1, items: [Item] }。Item の形は .claude/specs/qa-box/design.md
+// db = { version: 2, items: [Item] }。Item の形は .claude/specs/qa-box/design.md
 (function (GK) {
   "use strict";
 
-  const VERSION = 1;
+  // 2：prevAnswers（前の版の回答と表）を追加。1 は prevAnswers: [] で読む
+  const VERSION = 2;
+  const PREV_MAX = 3;
+  // NotebookLM の入力欄に 1 回で貼れる字数（上限は 3000〜4000 字。安全側の下限）
+  const INPUT_MAX = 3000;
   const P = () => GK.parse;
   // ブロックから入る項目（手で直したら貼り直しでは上書きしない）
   const BLOCK_FIELDS = ["project", "category", "status", "source", "reason", "date"];
@@ -647,99 +671,153 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       question: b.question, answer: b.answer, tables: clone(b.tables),
       owner: "", due: "", memo: "",
       edited: {}, history: [{ at, field: "取り込み", from: "", to: "新規" }],
+      prevAnswers: [],
       createdAt: at, updatedAt: at,
     };
   }
 
-  // 表を貼り直す。k 番目の表どうしを行の key（1 列目）で突き合わせる。手で直した行の状態は残す
+  // 回答を書き換える直前に、今の回答と表を前の版として退避する（新しい順に PREV_MAX 版まで）
+  function pushPrev(item, at) {
+    if (!Array.isArray(item.prevAnswers)) item.prevAnswers = [];
+    item.prevAnswers.unshift({ at: item.updatedAt || "", replacedAt: at, answer: item.answer, tables: clone(item.tables || []) });
+    if (item.prevAnswers.length > PREV_MAX) item.prevAnswers.length = PREV_MAX;
+  }
+
+  // 表を貼り直す。k 番目の表どうしを行の key（1 列目）で突き合わせる。手で直した行の状態は残す。
+  // 戻り値 { warnings, changed }（changed は履歴に足した数）
   function mergeTables(item, newTables, at) {
     const warnings = [];
+    let changed = 0;
+    const hist = (field, from, to) => { changed++; pushHist(item, at, field, from, to); };
     const oldTables = item.tables || [];
     const tables = clone(newTables);
     tables.forEach((t, k) => {
       const old = oldTables[k];
-      if (!old) return;
+      if (!old) { if (oldTables.length) hist(`表${k + 1}`, "", "表を追加"); return; }
       const byKey = new Map(old.rows.map((r) => [r.key, r]));
       const keep = new Set();
       for (const r of t.rows) {
         const o = byKey.get(r.key);
-        if (!o) { pushHist(item, at, `表${k + 1}「${r.key}」`, "", "行を追加"); continue; }
+        if (!o) { hist(`表${k + 1}「${r.key}」`, "", "行を追加"); continue; }
         keep.add(r.key);
+        // 状態以外のセル：列名で突き合わせる（列名が新しい列は比べない）
+        t.head.forEach((h, c) => {
+          if (c === 0 || c === t.stateCol) return;
+          const oc = old.head.indexOf(h);
+          if (oc < 0 || oc === old.stateCol) return;
+          const from = String(o.cells[oc] == null ? "" : o.cells[oc]).trim(), to = String(r.cells[c] == null ? "" : r.cells[c]).trim();
+          if (from !== to) hist(`表${k + 1}「${r.key}」の${h}`, from, to);
+        });
         if (t.stateCol < 0) continue;
         if (o.edited) { r.state = o.state; r.edited = true; r.cells[t.stateCol] = o.state; continue; }
-        if (o.state !== r.state) pushHist(item, at, `表${k + 1}「${r.key}」の状態`, o.state, r.state);
+        if (o.state !== r.state) hist(`表${k + 1}「${r.key}」の状態`, o.state, r.state);
       }
       const gone = old.rows.filter((r) => !keep.has(r.key));
-      for (const r of gone) pushHist(item, at, `表${k + 1}「${r.key}」`, "行", "消えた");
+      for (const r of gone) hist(`表${k + 1}「${r.key}」`, "行", "消えた");
       if (gone.length) warnings.push(`表${k + 1} から ${gone.length} 行が消えました（${gone.slice(0, 3).map((r) => r.key).join("、")}${gone.length > 3 ? " ほか" : ""}）`);
     });
-    if (oldTables.length > tables.length) warnings.push(`表が ${oldTables.length} から ${tables.length} に減りました`);
+    if (oldTables.length > tables.length) {
+      warnings.push(`表が ${oldTables.length} から ${tables.length} に減りました`);
+      for (let k = tables.length; k < oldTables.length; k++) hist(`表${k + 1}`, "表", "消えた");
+    }
     item.tables = tables;
-    return warnings;
+    return { warnings, changed };
   }
 
-  // 既存の質問にブロックを重ねる（item を書き換える）。戻り値は警告
+  // 既存の質問にブロックを重ねる（item を書き換える）。戻り値 { warnings, changed }
   function mergeInto(item, b, at) {
     const warnings = [];
     const kept = [];
+    let changed = 0;
+    const hist = (field, from, to) => { changed++; pushHist(item, at, field, from, to); };
     for (const k of BLOCK_FIELDS) {
       // 空欄は「分からない」なので前の値を残す。要確認の理由だけは、空欄で消す（確定になったとき）
       if (!(k in b.fields) || (b.fields[k] === "" && k !== "reason")) continue;
       const v = b.fields[k];
       if (item[k] === v) continue;
       if (item.edited && item.edited[k]) { kept.push(LABEL[k]); continue; }
-      pushHist(item, at, LABEL[k], item[k], v);
+      hist(LABEL[k], item[k], v);
       item[k] = v;
     }
     if (kept.length) warnings.push(`手で直した ${kept.join("・")} は残しました`);
-    if (P().keyOf(item.question) !== P().keyOf(b.question)) {
+    // 句読点・空白・全角半角だけの違いは同じ質問とみなし、元の文を残す
+    if (P().qkey(item.question) !== P().qkey(b.question)) {
       warnings.push("質問文が前と違います。別の質問なら「新規として追加」にしてください");
-      pushHist(item, at, LABEL.question, item.question, b.question);
+      hist(LABEL.question, item.question, b.question);
       item.question = b.question;
     }
     if (item.answer !== b.answer) {
-      pushHist(item, at, LABEL.answer, "", "回答を更新");
+      pushPrev(item, at);
+      hist(LABEL.answer, "", "回答を更新");
       item.answer = b.answer;
     }
-    warnings.push(...mergeTables(item, b.tables, at));
-    item.updatedAt = at;
-    return warnings;
+    const t = mergeTables(item, b.tables, at);
+    warnings.push(...t.warnings);
+    changed += t.changed;
+    if (changed) item.updatedAt = at;
+    return { warnings, changed };
   }
 
-  // 取り込みの計画。db は変えない。entries[i] = { block, action: "new"|"update", id, warnings }
+  // 取り込みの計画。db は変えない。
+  // entries[i] = { block, action, id, warnings, question?, matched? }
+  //   action：new（新しく足す）／update（既存を更新）／dup（既存か貼った中に同じ質問があり、中身も同じ。取り込まない）
+  //           ／same（ID 指定で中身が既存と同じ。取り込まない）
+  //   matched：update と dup で、何で既存と突き合わせたか（id ／ question）
   function plan(db, text, opt = {}) {
     const res = P().read(text);
     const at = nowIso(opt.now);
     const taken = [];
     const seen = new Set();
+    const byQ = new Map();
+    for (const it of db.items) { const k = P().qkey(it.question); if (!byQ.has(k)) byQ.set(k, it.id); }
+    const seenQ = new Map();
     const entries = res.ok.map((b) => {
       const warnings = b.warnings.slice();
+      const qk = P().qkey(b.question);
+      if (seenQ.has(qk)) {
+        warnings.push(`同じ質問が貼った中に 2 回出てきたので、2 つ目は取り込みません（1 つ目：${seenQ.get(qk)}）`);
+        return { block: b, action: "dup", id: seenQ.get(qk), warnings, matched: "paste" };
+      }
       let id = b.id;
       if (id && seen.has(id)) { warnings.push(`${id} が貼った中で 2 回出てきたので、2 つ目は新しい番号にしました`); id = null; }
       if (id) seen.add(id);
-      const cur = id && find(db, id);
+      let cur = id && find(db, id);
+      let matched = cur ? "id" : null;
+      if (!cur && byQ.has(qk)) {
+        cur = find(db, byQ.get(qk));
+        matched = "question";
+      }
       if (cur) {
-        warnings.push(...mergeInto(clone(cur), b, at));
-        return { block: b, action: "update", id, warnings, question: cur.question };
+        const r = mergeInto(clone(cur), b, at);
+        seenQ.set(qk, cur.id);
+        if (!r.changed) {
+          return { block: b, action: matched === "question" ? "dup" : "same", id: cur.id, warnings: matched === "question" ? [`${cur.id} と同じ質問・同じ回答です`] : [], question: cur.question, matched };
+        }
+        if (matched === "question") warnings.unshift(`${id ? id + " は無いので、" : ""}同じ質問の ${cur.id} を更新します`);
+        warnings.push(...r.warnings);
+        return { block: b, action: "update", id: cur.id, warnings, question: cur.question, matched };
       }
       if (!id) { id = nextId(db, [...taken, ...seen]); }
       taken.push(id);
+      seenQ.set(qk, id);
       return { block: b, action: "new", id, warnings };
     });
     return { entries, bad: res.bad };
   }
 
-  // 計画を db に反映する。asNew は「新規として追加」に切り替えた entries の番号
+  // 計画を db に反映する。asNew は「新規として追加」に切り替えた entries の番号（update と dup で有効）
   function apply(db, pl, opt = {}) {
     const at = nowIso(opt.now);
     const asNew = new Set(opt.asNew || []);
-    const done = { added: [], updated: [] };
+    const done = { added: [], updated: [], skipped: [] };
     const taken = [];
     pl.entries.forEach((e, i) => {
-      const cur = e.action === "update" && !asNew.has(i) && find(db, e.id);
+      const toNew = asNew.has(i) && (e.action === "update" || e.action === "dup");
+      if (e.action === "same" || (e.action === "dup" && !toNew)) { done.skipped.push(e.id); return; }
+      const cur = e.action === "update" && !toNew && find(db, e.id);
       if (cur) {
-        mergeInto(cur, e.block, at);
-        done.updated.push(cur.id);
+        if (mergeInto(cur, e.block, at).changed) done.updated.push(cur.id);
+        else done.skipped.push(cur.id);
         return;
       }
       let id = e.action === "new" && !find(db, e.id) ? e.id : nextId(db, taken);
@@ -772,9 +850,10 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     const at = nowIso(opt.now);
     const warnings = [];
     const tables = P().readTables(answer, warnings);
+    pushPrev(it, at);
     pushHist(it, at, LABEL.answer, "", "回答を編集");
     it.answer = answer;
-    warnings.push(...mergeTables(it, tables, at));
+    warnings.push(...mergeTables(it, tables, at).warnings);
     it.updatedAt = at;
     return warnings;
   }
@@ -806,16 +885,28 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
   const textOf = (it) => [it.id, it.project, it.category, it.status, it.source, it.reason, it.question, it.answer, it.owner, it.memo].join("\n");
   const norm = (s) => String(s || "").normalize("NFKC").toLowerCase();
   const isOverdue = (it, day) => !!it.due && it.due < day && it.status !== "確定";
+  // 根拠の欄を、ソース名ごとに分ける
+  const sourcesOf = (s) => String(s || "").split(/[、,，\n]/).map((x) => x.trim()).filter(Boolean);
+  const sources = (db) => [...new Set(db.items.flatMap((x) => sourcesOf(x.source)))].sort((a, b) => a.localeCompare(b, "ja"));
+  // 同じ質問（qkey が同じ）が 2 件以上ある、その qkey の集合
+  function dupKeys(db) {
+    const n = new Map();
+    for (const it of db.items) { const k = P().qkey(it.question); n.set(k, (n.get(k) || 0) + 1); }
+    return new Set([...n].filter(([, c]) => c > 1).map(([k]) => k));
+  }
 
-  // f = { text, status, project, category, owner, overdue, sort, today }
+  // f = { text, status, project, category, owner, source, dup, overdue, sort, today }
   function filter(db, f = {}) {
     const words = norm(f.text).split(/\s+/).filter(Boolean);
     const day = f.today || today();
+    const dups = f.dup ? dupKeys(db) : null;
     const list = db.items.filter((it) => {
       if (f.status && it.status !== f.status) return false;
       if (f.project && it.project !== f.project) return false;
       if (f.category && it.category !== f.category) return false;
       if (f.owner && it.owner !== f.owner) return false;
+      if (f.source && !sourcesOf(it.source).includes(f.source)) return false;
+      if (dups && !dups.has(P().qkey(it.question))) return false;
       if (f.overdue && !isOverdue(it, day)) return false;
       if (words.length) { const t = norm(textOf(it)); if (!words.every((w) => t.includes(w))) return false; }
       return true;
@@ -827,6 +918,8 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       due: (a, b) => (a.due || "9999").localeCompare(b.due || "9999") || a.id.localeCompare(b.id),
       status: (a, b) => order[a.status] - order[b.status] || a.id.localeCompare(b.id),
     }[f.sort || "id"];
+    // 重複の疑いは、同じ質問どうしを隣に並べる
+    if (dups) return list.sort((a, b) => P().qkey(a.question).localeCompare(P().qkey(b.question)) || by(a, b));
     return list.sort(by);
   }
 
@@ -939,19 +1032,89 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       if (!x || typeof x.id !== "string" || typeof x.question !== "string") throw new Error(`${i + 1} 件目の形が違います`);
       if (ids.has(x.id)) throw new Error(`${x.id} が 2 回あります`);
       ids.add(x.id);
-      const it = Object.assign({ project: "", category: "", status: "要確認", source: "", reason: "", date: "", answer: "", tables: [], owner: "", due: "", memo: "", edited: {}, history: [], createdAt: "", updatedAt: "" }, x);
+      const it = Object.assign({ project: "", category: "", status: "要確認", source: "", reason: "", date: "", answer: "", tables: [], owner: "", due: "", memo: "", edited: {}, history: [], prevAnswers: [], createdAt: "", updatedAt: "" }, x);
       it.status = P().normState(it.status).state;
+      if (!Array.isArray(it.prevAnswers)) it.prevAnswers = []; // version 1 には無い
       return it;
     });
     return { version: VERSION, items };
   }
 
+  // ---------- 聞き直す ----------
+  const reaskBlock = (it) => `## ${it.id}\n### 質問\n${it.question}\n`;
   // NotebookLM に聞き直す文
   function reaskText(it) {
-    return `次の質問に、指定の形式で答え直してください。見出しは「## ${it.id}」のままにしてください。\n\n## ${it.id}\n### 質問\n${it.question}\n`;
+    return `次の質問に、指定の形式で答え直してください。見出しは「## ${it.id}」のままにしてください。\n\n${reaskBlock(it)}`;
+  }
+  const cut = (s, n) => { const t = String(s || "").replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n) + "…" : t; };
+  function reaskCompose(list) {
+    const notes = list.map((it) => `- ${it.id}：前回 ${it.status}${it.reason ? `（${cut(it.reason, 40)}）` : ""}`);
+    return "次の質問に、指定の形式で答え直してください。見出しは「## Q-012」のような番号をそのまま使ってください。\n\n"
+      + "前回の状態：\n" + notes.join("\n") + "\n\n" + list.map(reaskBlock).join("\n");
+  }
+  // 複数の質問をまとめて聞き直す文。1 通 max 字以内に、質問の切れ目で分ける。
+  // 戻り値 { parts: [文], warnings: [文] }。1 件で max を超える質問は単独の 1 通にして警告する
+  function reaskManyText(items, max = INPUT_MAX) {
+    const parts = [], warnings = [];
+    let cur = [];
+    for (const it of items) {
+      if (reaskCompose([it]).length > max) {
+        if (cur.length) { parts.push(reaskCompose(cur)); cur = []; }
+        parts.push(reaskCompose([it]));
+        warnings.push(`${it.id} は 1 件で ${max} 字を超えています。質問文を短くしてください`);
+        continue;
+      }
+      if (cur.length && reaskCompose([...cur, it]).length > max) { parts.push(reaskCompose(cur)); cur = []; }
+      cur.push(it);
+    }
+    if (cur.length) parts.push(reaskCompose(cur));
+    return { parts, warnings };
   }
 
-  GK.model = { VERSION, LABEL, EDIT_FIELDS, empty, nextId, find, plan, apply, edit, editAnswer, editRow, remove, filter, rows, filterRows, counts, values, isOverdue, itemsCsv, rowsCsv, tableTsv, toJson, toAiJson, fromJson, reaskText, today };
+  // ---------- 前の版との差分 ----------
+  // 行単位の差分（LCS）。[{ op: "same"|"add"|"del", text }]
+  function diffLines(a, b) {
+    const x = String(a || "").split("\n"), y = String(b || "").split("\n");
+    const m = x.length, n = y.length;
+    if (m * n > 1e6) return [...x.map((text) => ({ op: "del", text })), ...y.map((text) => ({ op: "add", text }))];
+    const L = Array.from({ length: m + 1 }, () => new Uint32Array(n + 1));
+    for (let i = m - 1; i >= 0; i--) for (let j = n - 1; j >= 0; j--) L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    const out = [];
+    let i = 0, j = 0;
+    while (i < m && j < n) {
+      if (x[i] === y[j]) { out.push({ op: "same", text: x[i] }); i++; j++; }
+      else if (L[i + 1][j] >= L[i][j + 1]) out.push({ op: "del", text: x[i++] });
+      else out.push({ op: "add", text: y[j++] });
+    }
+    while (i < m) out.push({ op: "del", text: x[i++] });
+    while (j < n) out.push({ op: "add", text: y[j++] });
+    return out;
+  }
+  // 表の差分。k 番目どうしを行の key で突き合わせ、列は列名で突き合わせる。
+  // [{ k, head, rows: [{ key, op: "same"|"add"|"del"|"chg", cells: [{ head, from, to, changed }] }] }]
+  function diffTables(oldTables, newTables) {
+    const out = [];
+    const n = Math.max((oldTables || []).length, (newTables || []).length);
+    const val = (r, t, h) => { const c = t.head.indexOf(h); if (c < 0) return ""; return String(c === t.stateCol ? r.state : (r.cells[c] == null ? "" : r.cells[c])).trim(); };
+    for (let k = 0; k < n; k++) {
+      const o = oldTables[k] || { head: [], stateCol: -1, rows: [] };
+      const t = newTables[k] || { head: [], stateCol: -1, rows: [] };
+      const head = [...t.head, ...o.head.filter((h) => !t.head.includes(h))];
+      const oldBy = new Map(o.rows.map((r) => [r.key, r]));
+      const rowsOut = [];
+      for (const r of t.rows) {
+        const or = oldBy.get(r.key);
+        const cells = head.map((h) => { const from = or ? val(or, o, h) : "", to = val(r, t, h); return { head: h, from, to, changed: !!or && from !== to }; });
+        rowsOut.push({ key: r.key, op: !or ? "add" : cells.some((c) => c.changed) ? "chg" : "same", cells });
+        oldBy.delete(r.key);
+      }
+      for (const or of oldBy.values()) rowsOut.push({ key: or.key, op: "del", cells: head.map((h) => ({ head: h, from: val(or, o, h), to: "", changed: false })) });
+      out.push({ k, head, rows: rowsOut });
+    }
+    return out;
+  }
+
+  GK.model = { VERSION, INPUT_MAX, PREV_MAX, LABEL, EDIT_FIELDS, empty, nextId, find, plan, apply, edit, editAnswer, editRow, remove, filter, rows, filterRows, counts, values, sources, sourcesOf, dupKeys, isOverdue, itemsCsv, rowsCsv, tableTsv, toJson, toAiJson, fromJson, reaskText, reaskManyText, diffLines, diffTables, today };
 })(globalThis.GK = globalThis.GK || {});
 
 // ---- store.js ----
@@ -1041,9 +1204,11 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     db: M.empty(),
     tab: "list",
     plan: null, asNew: new Set(), importProject: "",
-    f: { text: "", status: "", project: "", category: "", owner: "", overdue: false, sort: "id" },
+    f: { text: "", status: "", project: "", category: "", owner: "", source: "", dup: false, overdue: false, sort: "id" },
+    reask: null, // まとめて聞き直す文 { parts, warnings, copied: Set }
     rf: { text: "", status: "", project: "" },
     open: null, editAnswer: false, confirmDelete: null,
+    cmpOpen: null, cmpVer: 0, // 前の版と比べる：開いている質問と、何版前か
     pendingJson: null,
   };
   const $ = (id) => document.getElementById(id);
@@ -1165,26 +1330,30 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
 
   function previewView() {
     const pl = S.plan;
-    const nNew = pl.entries.filter((e, i) => e.action === "new" || S.asNew.has(i)).length;
-    const nUpd = pl.entries.length - nNew;
+    // 各行の行き先：new ／ update ／ skip（重複・変化なし）
+    const fate = (e, i) => (e.action === "new" || ((e.action === "update" || e.action === "dup") && S.asNew.has(i)) ? "new" : e.action === "update" ? "update" : "skip");
+    const nNew = pl.entries.filter((e, i) => fate(e, i) === "new").length;
+    const nUpd = pl.entries.filter((e, i) => fate(e, i) === "update").length;
+    const nSkip = pl.entries.length - nNew - nUpd;
     const list = pl.entries.map((e, i) => {
-      const upd = e.action === "update" && !S.asNew.has(i);
-      const cb = e.action === "update" ? el("label", { class: "inline" }, (() => {
+      const fa = fate(e, i);
+      const cb = e.action === "update" || e.action === "dup" ? el("label", { class: "inline" }, (() => {
         const c = el("input", { type: "checkbox" });
         c.checked = S.asNew.has(i);
         c.addEventListener("change", () => { if (c.checked) S.asNew.add(i); else S.asNew.delete(i); render(); });
         return c;
       })(), "新規として追加") : null;
       const rowsN = e.block.tables.reduce((a, t) => a + (t.stateCol >= 0 ? t.rows.length : 0), 0);
-      return el("li", { class: "pv" + (e.warnings.length ? " warn" : "") },
+      const tag = fa === "new" ? ["new", "新規"] : fa === "update" ? ["upd", e.matched === "question" ? "更新（同じ質問）" : "更新"] : ["dup", e.action === "same" ? "変化なし（取り込みません）" : "重複（取り込みません）"];
+      return el("li", { class: "pv" + (fa === "skip" ? " skip" : e.warnings.length ? " warn" : "") },
         el("div", { class: "pv-head" },
-          el("span", { class: "tag " + (upd ? "upd" : "new") }, upd ? "更新" : "新規"),
-          el("strong", null, upd ? e.id : (e.action === "new" ? e.id : "新しい番号")),
+          el("span", { class: "tag " + tag[0] }, tag[1]),
+          el("strong", null, fa === "new" ? (e.action === "new" ? e.id : "新しい番号") : e.id),
           badge(e.block.fields.status),
           el("span", null, short(e.block.question, 60)),
           rowsN ? el("span", { class: "muted" }, `表の項目 ${rowsN}`) : null,
           cb),
-        e.action === "update" && P.keyOf(e.question) !== P.keyOf(e.block.question) ? el("div", { class: "muted" }, "前の質問：" + short(e.question, 60)) : null,
+        e.action === "update" && P.qkey(e.question) !== P.qkey(e.block.question) ? el("div", { class: "muted" }, "前の質問：" + short(e.question, 60)) : null,
         e.warnings.length ? el("ul", { class: "warns" }, e.warnings.map((w) => el("li", null, w))) : null);
     });
     const bad = pl.bad.length ? el("div", { class: "bad-blocks" }, el("h3", null, `読めないブロック ${pl.bad.length}（取り込みません）`),
@@ -1194,7 +1363,7 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       S.plan = null;
       S.pasteText = "";
       S.lastDone = done;
-      save(`取り込みました（新規 ${done.added.length}・更新 ${done.updated.length}）`);
+      save(`取り込みました（新規 ${done.added.length}・更新 ${done.updated.length}${done.skipped.length ? `・取り込まなかった重複 ${done.skipped.length}` : ""}）`);
       S.tab = "list";
       S.f = Object.assign({}, S.f, { text: "", status: "" });
       render();
@@ -1203,7 +1372,7 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       ? el("p", { class: "warn-text" }, "ブロックが見つかりません。「## 新規」または「## Q-012」の行と、その下の「状態:」「### 質問」「### 回答」が要ります。NotebookLM に指示を貼ってから聞き直してください")
       : null;
     return el("section", { class: "card" },
-      el("h2", null, `読み取り結果：新規 ${nNew} 件・更新 ${nUpd} 件`),
+      el("h2", null, `読み取り結果：新規 ${nNew} 件・更新 ${nUpd} 件・重複 ${nSkip} 件`),
       empty, el("ul", { class: "pvlist" }, list), bad,
       el("div", { class: "row-actions" }, go, el("button", { type: "button", onclick: () => { S.plan = null; render(); } }, "やめる")));
   }
@@ -1212,10 +1381,26 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
   function viewList() {
     const f = S.f;
     const list = M.filter(S.db, f);
-    const set = (k) => (v) => { S.f[k] = v; render(); };
+    const set = (k) => (v) => { S.f[k] = v; S.reask = null; render(); };
+    const reaskBox = el("div", { class: "reask", "aria-live": "polite" });
     const search = el("input", { type: "search", value: f.text, placeholder: "検索（表の中も）", "aria-label": "検索" });
-    search.addEventListener("input", () => { S.f.text = search.value; renderListBody(); });
-    const overdue = el("label", { class: "inline" }, (() => { const c = el("input", { type: "checkbox" }); c.checked = f.overdue; c.addEventListener("change", () => set("overdue")(c.checked)); return c; })(), "期限切れだけ");
+    search.addEventListener("input", () => { S.f.text = search.value; S.reask = null; reaskBox.replaceChildren(); renderListBody(); });
+    const check = (k, label) => el("label", { class: "inline" }, (() => { const c = el("input", { type: "checkbox" }); c.checked = f[k]; c.addEventListener("change", () => set(k)(c.checked)); return c; })(), label);
+    const overdue = check("overdue", "期限切れだけ");
+    const nDupKeys = M.dupKeys(S.db).size;
+    const dup = nDupKeys || f.dup ? check("dup", `重複の疑いだけ（${nDupKeys} 組）`) : null;
+    const reaskAll = el("button", { type: "button", title: `表示中の質問を、NotebookLM に貼れる長さ（1 通 ${M.INPUT_MAX} 字以内）に分けてコピー` }, "表示中を聞き直す文でコピー");
+    reaskAll.addEventListener("click", async () => {
+      const r = M.reaskManyText(M.filter(S.db, S.f));
+      if (!r.parts.length) { flash(reaskAll, "表示中の質問がありません"); return; }
+      S.reask = Object.assign(r, { copied: new Set() });
+      if (r.parts.length === 1) {
+        const ok = await copyText(r.parts[0]);
+        if (ok) S.reask.copied.add(0);
+        flash(reaskAll, ok ? "コピーしました。NotebookLM に貼ってください" : "コピーできませんでした", 2400);
+      }
+      fillReask(reaskBox);
+    });
     const sort = el("select", { "aria-label": "並べ替え" }, [["id", "ID 順"], ["updated", "更新が新しい順"], ["due", "期限が近い順"], ["status", "要確認から"]].map(([v, l]) => el("option", { value: v }, l)));
     sort.value = f.sort;
     sort.addEventListener("change", () => set("sort")(sort.value));
@@ -1227,12 +1412,15 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       select(M.values(S.db, "project"), f.project, set("project"), "案件", "案件：すべて"),
       select(M.values(S.db, "category"), f.category, set("category"), "分類", "分類：すべて"),
       select(M.values(S.db, "owner"), f.owner, set("owner"), "担当", "担当：すべて"),
-      overdue, sort,
+      select(M.sources(S.db), f.source, set("source"), "根拠", "根拠：すべて"),
+      overdue, dup, sort,
+      reaskAll,
       el("button", { type: "button", onclick: () => download(`質問箱_${M.today()}.csv`, M.itemsCsv(M.filter(S.db, S.f)), "text/csv;charset=utf-8") }, "表示中を CSV"),
       el("button", { type: "button", title: "表示中の質問・回答・状態を AI に渡す JSON で保存（控えの書き出しとは別。読み込みには使えません）", onclick: () => download(`質問箱_AI用_${M.today()}.json`, M.toAiJson(M.filter(S.db, S.f)), "application/json") }, "表示中を AI 用 JSON"),
       aiCopy);
     const base = M.filter(S.db, Object.assign({}, f, { status: "" }));
-    const head = el("div", { class: "card" }, countBar(M.counts(base, (x) => x.status), f.status, set("status")), toolbar);
+    if (S.reask) fillReask(reaskBox);
+    const head = el("div", { class: "card" }, countBar(M.counts(base, (x) => x.status), f.status, set("status")), toolbar, reaskBox);
     const body = el("div", { id: "list-body" });
     S._listBody = body;
     if (!all.length) {
@@ -1241,6 +1429,25 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
     }
     fillList(body, list);
     return el("div", null, head, body);
+  }
+  // まとめて聞き直す文が複数通に分かれたときのボタン。コピーした通には印を付ける
+  function fillReask(box) {
+    const r = S.reask;
+    if (!r) { box.replaceChildren(); return; }
+    const n = r.parts.length;
+    const btns = n > 1 ? r.parts.map((t, i) => {
+      const b = el("button", { type: "button", class: r.copied.has(i) ? "done" : "", title: `${t.length} 字` }, `${i + 1}/${n} をコピー`);
+      b.addEventListener("click", async () => {
+        if (await copyText(t)) { r.copied.add(i); b.classList.add("done"); flash(b, "コピーしました"); }
+        else flash(b, "コピーできませんでした");
+      });
+      return b;
+    }) : [];
+    box.replaceChildren(...[
+      n > 1 ? el("span", { class: "muted" }, `${M.INPUT_MAX} 字を超えるので ${n} 通に分けました。1 通ずつ NotebookLM に貼り、返ってきた回答を取り込んでください：`) : null,
+      ...btns,
+      r.warnings.length ? el("ul", { class: "warns" }, r.warnings.map((w) => el("li", null, w))) : null,
+    ].filter(Boolean));
   }
   function renderListBody() {
     if (!S._listBody) return;
@@ -1305,7 +1512,12 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       S.answerWarn = null;
     }
     const reask = el("button", { type: "button" }, "聞き直す文をコピー");
-    reask.addEventListener("click", async () => flash(reask, (await copyText(M.reaskText(it))) ? "コピーしました。NotebookLM に貼ってください" : "コピーできませんでした", 2400));
+    reask.addEventListener("click", async () => {
+      const t = M.reaskText(it);
+      const ok = await copyText(t);
+      const long = t.length > M.INPUT_MAX ? `。ただし ${M.INPUT_MAX} 字を超えています（${t.length} 字）。質問文を短くしてください` : "";
+      flash(reask, ok ? "コピーしました" + (long || "。NotebookLM に貼ってください") : "コピーできませんでした", long ? 5000 : 2400);
+    });
     const del = el("button", { class: "danger", type: "button", onclick: () => {
       if (S.confirmDelete === it.id) { M.remove(S.db, it.id); S.open = null; S.confirmDelete = null; save(`${it.id} を削除しました`); render(); }
       else { S.confirmDelete = it.id; render(); }
@@ -1317,8 +1529,46 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       field("question", "質問", "area"),
       el("div", { class: "answer-head" }, el("h3", null, "回答"), S.editAnswer ? null : el("button", { class: "small", type: "button", onclick: () => { S.editAnswer = true; render(); } }, "回答を編集")),
       answer,
+      compareView(it),
       el("div", { class: "row-actions" }, reask, del),
       hist);
+  }
+
+  // 前の版と比べる。表は行ごと（追加・削除・変更）、本文は行単位の差分
+  function compareView(it) {
+    const prev = it.prevAnswers || [];
+    if (!prev.length) return null;
+    const box = el("details", { class: "cmp" });
+    if (S.cmpOpen === it.id) box.open = true;
+    box.addEventListener("toggle", () => { S.cmpOpen = box.open ? it.id : null; });
+    const v = Math.min(S.cmpVer || 0, prev.length - 1);
+    const pick = el("select", { "aria-label": "比べる版" }, prev.map((p, i) => el("option", { value: String(i) }, `${i + 1} つ前（${fmtAt(p.replacedAt)} まで）`)));
+    pick.value = String(v);
+    pick.addEventListener("change", () => { S.cmpVer = +pick.value; S.cmpOpen = it.id; render(); });
+    const p = prev[v];
+    const OP = { add: "追加", del: "削除", chg: "変更", same: "" };
+    const tables = M.diffTables(p.tables || [], it.tables || []).map((d) => {
+      const changed = d.rows.filter((r) => r.op !== "same").length;
+      const head = el("tr", null, el("th", null, "変化"), d.head.map((h) => el("th", null, h)));
+      const body = d.rows.map((r) => el("tr", { class: r.op === "same" ? "" : "d-" + r.op },
+        el("td", null, el("span", { class: "diff-tag" }, OP[r.op])),
+        r.cells.map((c) => c.changed
+          ? el("td", { class: "d-cell" }, el("del", null, c.from || "（空）"), " → ", el("ins", null, c.to || "（空）"))
+          : el("td", null, r.op === "del" ? c.from : c.to))));
+      return el("div", { class: "qtable" }, el("div", { class: "muted" }, `表${d.k + 1}：変わった行 ${changed}`),
+        el("div", { class: "tablewrap" }, el("table", null, el("thead", null, head), el("tbody", null, body))));
+    });
+    const lines = M.diffLines(p.answer, it.answer);
+    const mark = { add: "+ ", del: "- ", same: "  " };
+    const text = el("div", { class: "dlines", role: "region", "aria-label": "本文の差分" },
+      lines.map((l) => el("div", { class: "l-" + l.op }, mark[l.op] + (l.text || " "))));
+    box.append(
+      el("summary", null, `前の版と比べる（${prev.length}）`),
+      el("div", { class: "row-actions" }, pick, el("span", { class: "muted" }, "本文の「+」は今の版で増えた行、「-」は消えた行")),
+      ...tables,
+      el("h4", null, "回答の本文"),
+      text);
+    return box;
   }
 
   // ---------- 項目の一覧 ----------
@@ -1333,7 +1583,7 @@ GK.PROMPT = "あなたは質問箱の回答係です。質問には、ソース�
       const table = el("table", { class: "grid" },
         el("thead", null, el("tr", null, ["ID", "案件", "表", "項目", "状態", "内容"].map((h) => el("th", null, h)))),
         el("tbody", null, list.map((r) => el("tr", null,
-          el("td", { class: "id" }, el("button", { class: "link", type: "button", onclick: () => { S.tab = "list"; S.open = r.id; S.f = Object.assign({}, S.f, { text: "", status: "", project: "", category: "", owner: "", overdue: false }); render(); } }, r.id)),
+          el("td", { class: "id" }, el("button", { class: "link", type: "button", onclick: () => { S.tab = "list"; S.open = r.id; S.f = Object.assign({}, S.f, { text: "", status: "", project: "", category: "", owner: "", source: "", dup: false, overdue: false }); S.reask = null; render(); } }, r.id)),
           el("td", null, r.project),
           el("td", { class: "nowrap" }, "表" + (r.table + 1)),
           el("td", null, el("strong", null, r.key)),
